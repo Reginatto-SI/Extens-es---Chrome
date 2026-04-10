@@ -158,6 +158,6 @@ Não criar novos padrões.
 Não reinventar estrutura.
 Apenas adaptar este modelo ao problema.
 
-Pode Seguir como base visual: "extensoes/02 - Validador de XML IVA/"
+Pode Seguir como base visual: "extensoes/02 - Validador de XML IVA/Xml - IVA"
 ---
 
