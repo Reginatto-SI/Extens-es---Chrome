@@ -1,0 +1,6 @@
+/* Mantém 1760px como largura ideal no centro */
+.appShell {
+  max-width: 1760px;
+  margin: 0 auto;
+  background: transparent;
+}

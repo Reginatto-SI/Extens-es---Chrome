@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Jm Clientes</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body class="popup">
+  <header class="top">
+    <div class="brand">
+      <div class="logo">JM</div>
+      <div>
+        <div class="title">Jm Clientes</div>
+        <div class="subtitle">Consulta rápida • Local</div>
+      </div>
+    </div>
+  </header>
+
+  <section class="controls">
+    <div class="statusRow">
+      <div id="statusPill" class="pill">Status: iniciando…</div>
+      <button id="toggleLogsBtn" class="btn small" type="button">Logs</button>
+    </div>
+
+    <div id="fatalBox" class="fatal hidden">
+      <b>O JavaScript da extensão não carregou.</b><br/>
+      Isso faz com que nenhum botão funcione.<br/>
+      <span class="fatalHint">
+        Verifique se existe um arquivo chamado exatamente <code>popup.js</code> (e não <code>popup.js.txt</code>),
+        e depois clique em “Recarregar” na tela <code>chrome://extensions</code>.
+      </span>
+    </div>
+
+    <input id="searchInput" class="search" type="search"
+      placeholder="Pesquisar por qualquer campo (CNPJ, IE, Razão Social...). Pode digitar sem pontuação." />
+
+    <div class="btnRow">
+      <button id="addBtn" class="btn primary" type="button">+ Novo</button>
+      <button id="fieldsBtn" class="btn" type="button">Campos</button>
+      <button id="exportBtn" class="btn" type="button">Exportar</button>
+      <button id="importBtn" class="btn" type="button">Importar</button>
+      <button id="openAppBtn" class="btn" type="button">Abrir em tela grande</button>
+    </div>
+
+    <div class="hint">
+      Clique em qualquer célula para copiar • Duplo clique na linha para editar • Busca ignora pontuação em números
+    </div>
+  </section>
+
+  <section class="tableWrap">
+    <div id="emptyState" class="empty hidden">
+      Nenhum cliente encontrado. Clique em <b>+ Novo</b>.
+    </div>
+
+    <table class="table">
+      <thead id="tableHead"></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </section>
+
+  <!-- Logs Panel -->
+  <section id="logsPanel" class="logs hidden">
+    <div class="logsHeader">
+      <div class="logsTitle">Logs da Extensão (últimos eventos)</div>
+      <div class="logsBtns">
+        <button id="copyLogsBtn" class="btn small" type="button">Copiar</button>
+        <button id="clearLogsBtn" class="btn small danger" type="button">Limpar</button>
+      </div>
+    </div>
+    <pre id="logsText" class="logsText">Carregando logs…</pre>
+  </section>
+
+  <!-- Toast -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- Modal -->
+  <div id="modal" class="overlay hidden" aria-hidden="true">
+    <div class="modal">
+      <div class="modalHeader">
+        <h3 id="modalTitle">Novo Cliente</h3>
+        <button id="closeModal" class="iconBtn" type="button" aria-label="Fechar">✕</button>
+      </div>
+
+      <form id="clientForm">
+        <div id="formFields" class="formGrid"></div>
+
+        <div class="modalFooter">
+          <button type="button" id="deleteBtn" class="btn danger hidden">Excluir</button>
+          <div class="spacer"></div>
+          <button type="button" id="cancelBtn" class="btn">Cancelar</button>
+          <button type="submit" class="btn primary">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <input type="file" id="importFile" accept="application/json" hidden />
+  <script src="popup.js"></script>
+</body>
+</html>
