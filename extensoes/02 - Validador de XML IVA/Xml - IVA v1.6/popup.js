@@ -33,6 +33,7 @@ document.addEventListener("DOMContentLoaded", () => {
     exportPdfBtn: document.getElementById("exportPdfBtn"),
     clearBtn: document.getElementById("clearBtn"),
     lastRun: document.getElementById("lastRun"),
+    versionMeta: document.getElementById("versionMeta"),
     printMeta: document.getElementById("printMeta"),
     xmlModal: document.getElementById("xmlModal"),
     xmlModalBackdrop: document.getElementById("xmlModalBackdrop"),
@@ -44,6 +45,7 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   bindEvents(els);
+  updateExtensionMeta(els);
   syncAnalysisModeUi(els);
   updateAnalysisBadge(els);
   renderTable(els);
@@ -1023,4 +1025,28 @@ function exportPdf(els) {
   setTimeout(() => {
     window.print();
   }, 100);
+}
+
+async function updateExtensionMeta(els) {
+  if (!els.versionMeta || !chrome?.runtime?.getManifest) {
+    return;
+  }
+
+  const manifest = chrome.runtime.getManifest();
+  const version = manifest?.version || "--";
+  let updatedAtLabel = "data indisponível";
+
+  try {
+    const data = await chrome.storage.local.get(["extensionUpdatedAt", "extensionVersion"]);
+    const updatedAt = data?.extensionUpdatedAt;
+
+    // Exibe a data de atualização registrada no ciclo de instalação/update.
+    if (updatedAt) {
+      updatedAtLabel = formatDateTime(new Date(updatedAt));
+    }
+  } catch (error) {
+    console.error("Erro ao carregar metadados da extensão:", error);
+  }
+
+  els.versionMeta.textContent = `Versão ${version} • Atualizado em ${updatedAtLabel}`;
 }

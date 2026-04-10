@@ -77,6 +77,13 @@ body.fullpage {
   max-width: 780px;
 }
 
+.hero-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+
 .pill {
   background: #1b2744;
   border: 1px solid #304063;
@@ -85,6 +92,11 @@ body.fullpage {
   border-radius: 999px;
   white-space: nowrap;
   font-size: 13px;
+}
+
+.pill.subtle {
+  background: rgba(27, 39, 68, 0.4);
+  color: #b8c9ea;
 }
 
 .panel {
