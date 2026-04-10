@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Validador NF-e IBS/CBS</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body class="fullpage">
+  <div class="app app-full">
+    <header class="hero">
+      <div>
+        <h1>Validador NF-e IBS/CBS</h1>
+        <p>
+          Importe XMLs de NF-e para validar IBS/CBS e visualizar os valores
+          encontrados no XML de forma clara e objetiva.
+        </p>
+      </div>
+      <div class="hero-meta">
+        <div class="pill subtle" id="versionMeta">Versão -- • Atualizado em --</div>
+        <div class="pill" id="lastRun">Sem análise</div>
+      </div>
+    </header>
+
+    <section class="panel upload-panel">
+      <div class="analysis-config">
+        <div class="field">
+          <label for="analysisType">Tipo de análise</label>
+          <select id="analysisType" class="select-field">
+            <option value="">Selecione o tipo de análise</option>
+            <option value="emitidas">Validar impostos de Notas Emitidas</option>
+            <option value="recebidas">Validar impostos de Notas Recebidas</option>
+          </select>
+        </div>
+
+        <div class="mode-summary" id="modeSummary">
+          Selecione o tipo de análise para liberar a importação dos XMLs.
+        </div>
+      </div>
+
+      <div class="dropzone disabled" id="dropzone">
+        <div class="drop-icon">📄</div>
+        <div class="drop-title">Arraste XMLs aqui</div>
+        <div class="drop-subtitle">ou use os botões abaixo</div>
+
+        <div class="upload-actions">
+          <label class="btn primary disabled" id="filesTrigger">
+            Selecionar XMLs
+            <input
+              type="file"
+              id="filesInput"
+              accept=".xml,text/xml,application/xml"
+              multiple
+              hidden
+              disabled
+            />
+          </label>
+
+          <label class="btn secondary disabled" id="folderTrigger">
+            Selecionar pasta
+            <input
+              type="file"
+              id="folderInput"
+              accept=".xml,text/xml,application/xml"
+              webkitdirectory
+              multiple
+              hidden
+              disabled
+            />
+          </label>
+        </div>
+      </div>
+
+      <div class="small-note">
+        Clique na chave da NF-e para copiar automaticamente.
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="print-header" id="printHeader">
+        <h2>Relatório de Validação NF-e IBS/CBS</h2>
+        <p id="printMeta"></p>
+      </div>
+
+      <div class="top-summary">
+        <div class="stats">
+          <div class="stat">
+            <span id="totalCount">0</span>
+            <small>Total</small>
+          </div>
+          <div class="stat ok">
+            <span id="okCount">0</span>
+            <small>OK</small>
+          </div>
+          <div class="stat error">
+            <span id="errorCount">0</span>
+            <small>Com erro</small>
+          </div>
+        </div>
+
+        <div class="analysis-badge" id="analysisBadge">Tipo de análise: -</div>
+      </div>
+
+      <div class="filters-panel">
+        <div class="search-block">
+          <label for="searchInput">Busca</label>
+          <input
+            type="search"
+            id="searchInput"
+            placeholder="Buscar por chave, emitente, destinatário, CFOP, natureza ou data"
+          />
+        </div>
+
+        <div class="filters-inline">
+          <div class="field-inline">
+            <label for="startDate">Data inicial</label>
+            <input type="date" id="startDate" />
+          </div>
+
+          <div class="field-inline">
+            <label for="endDate">Data final</label>
+            <input type="date" id="endDate" />
+          </div>
+
+          <label class="check">
+            <input type="checkbox" id="onlyErrorsToggle" checked />
+            Mostrar só erros
+          </label>
+
+          <label class="check highlight-check">
+            <input type="checkbox" id="showTaxValuesToggle" />
+            Mostrar valores IBS e CBS
+          </label>
+        </div>
+      </div>
+
+      <div class="totals-panel hidden" id="totalsPanel">
+        <div class="stat total-highlight">
+          <span id="filteredCount">0</span>
+          <small>Notas exibidas</small>
+        </div>
+
+        <div class="stat money">
+          <span id="filteredIbsTotal">R$ 0,00</span>
+          <small>Total IBS filtrado</small>
+        </div>
+
+        <div class="stat money">
+          <span id="filteredCbsTotal">R$ 0,00</span>
+          <small>Total CBS filtrado</small>
+        </div>
+      </div>
+
+      <div class="actions-row">
+        <div class="actions-left">
+          <button class="btn primary" id="copyKeysBtn">Copiar chaves com erro</button>
+          <button class="btn secondary" id="exportCsvBtn">Exportar CSV</button>
+          <button class="btn secondary" id="exportPdfBtn">Gerar PDF</button>
+          <button class="btn ghost" id="clearBtn">Limpar</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="resultsTable">
+          <thead>
+            <tr>
+              <th class="col-status">Status</th>
+              <th class="col-chave" id="keyColumnTitle">Chave NF-e</th>
+              <th class="col-data">Data de emissão</th>
+              <th class="col-emitente">Emitente</th>
+              <th class="col-destinatario">Destinatário</th>
+              <th class="col-natureza">Natureza da operação</th>
+              <th class="col-cfop">CFOP(s)</th>
+              <th class="col-ibs">IBS</th>
+              <th class="col-cbs">CBS</th>
+              <th class="col-acoes no-print">Ações</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody">
+            <tr class="empty-row">
+              <td colspan="10">Nenhum XML analisado.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="footer">
+      Desenvolvido por Edimar Reginato - JM Assessoria e Contabilidade MT
+    </footer>
+  </div>
+
+  <div class="modal hidden" id="xmlModal" aria-hidden="true">
+    <div class="modal-backdrop" id="xmlModalBackdrop"></div>
+
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="xmlModalTitle">
+      <div class="modal-header">
+        <div>
+          <h3 id="xmlModalTitle">Visualizar XML</h3>
+          <p id="xmlModalMeta">Arquivo selecionado</p>
+        </div>
+        <button class="btn ghost" id="closeModalBtn" type="button">Fechar</button>
+      </div>
+
+      <div class="modal-body">
+        <pre id="xmlContent"></pre>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
