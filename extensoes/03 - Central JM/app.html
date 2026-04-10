@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Central Inteligente do Escritório</title>
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <div class="appShell">
+    <header class="topHeader card">
+      <div>
+        <h1>Central Inteligente do Escritório</h1>
+        <p>Hub interno flexível para dados de clientes, acessos, links e rotina operacional.</p>
+      </div>
+      <div class="topMeta">
+        <span id="versionBadge" class="badge">v1.0.0</span>
+        <span id="statusBadge" class="badge subtle">Local • pronto</span>
+      </div>
+    </header>
+
+    <section class="toolbar card">
+      <input id="searchInput" class="search" type="search" placeholder="Busca global por título e conteúdo dos campos..." />
+      <select id="groupFilter" class="select">
+        <option value="">Todos os grupos</option>
+      </select>
+      <div class="toolbarActions">
+        <button id="newRecordBtn" class="btn primary" type="button">+ Novo registro</button>
+        <button id="configureBtn" class="btn" type="button">Configurar estrutura</button>
+        <button id="importBtn" class="btn" type="button">Importar</button>
+        <button id="exportBtn" class="btn" type="button">Exportar</button>
+      </div>
+    </section>
+
+    <section class="contentGrid">
+      <aside class="recordsPane card">
+        <div class="paneHeader">
+          <h2>Registros</h2>
+          <span id="recordCount" class="badge subtle">0 itens</span>
+        </div>
+        <div id="recordsList" class="recordsList"></div>
+        <div id="emptyState" class="empty hidden">Nenhum registro encontrado. Clique em <b>+ Novo registro</b>.</div>
+      </aside>
+
+      <main class="detailsPane card">
+        <div class="paneHeader">
+          <h2>Detalhes</h2>
+          <div id="detailActions" class="detailActions hidden">
+            <button id="detailEditBtn" class="btn small" type="button">Editar</button>
+            <button id="detailDuplicateBtn" class="btn small" type="button">Duplicar</button>
+            <button id="detailDeleteBtn" class="btn small danger" type="button">Excluir</button>
+          </div>
+        </div>
+        <div id="detailsContent" class="detailsContent">
+          <p class="muted">Selecione um registro para visualizar os dados organizados por grupo.</p>
+        </div>
+      </main>
+    </section>
+
+    <input id="importFile" type="file" accept="application/json,.json,.txt,text/plain" hidden />
+  </div>
+
+  <div id="recordModal" class="overlay hidden" aria-hidden="true">
+    <div class="modal large">
+      <div class="modalHeader">
+        <h3 id="recordModalTitle">Novo registro</h3>
+        <button id="closeRecordModalBtn" class="iconBtn" type="button" aria-label="Fechar">✕</button>
+      </div>
+      <form id="recordForm">
+        <div class="formField">
+          <label for="recordTitle">Título principal</label>
+          <input id="recordTitle" name="recordTitle" required />
+        </div>
+        <div id="dynamicGroups" class="dynamicGroups"></div>
+        <div class="modalFooter">
+          <button id="deleteRecordBtn" type="button" class="btn danger hidden">Excluir</button>
+          <div class="spacer"></div>
+          <button id="cancelRecordBtn" type="button" class="btn">Cancelar</button>
+          <button type="submit" class="btn primary">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="configModal" class="overlay hidden" aria-hidden="true">
+    <div class="modal xl">
+      <div class="modalHeader">
+        <h3>Configuração da estrutura</h3>
+        <button id="closeConfigModalBtn" class="iconBtn" type="button" aria-label="Fechar">✕</button>
+      </div>
+      <div class="configLayout">
+        <section class="configGroups">
+          <div class="paneHeader">
+            <h4>Grupos</h4>
+            <button id="addGroupBtn" class="btn small" type="button">+ Grupo</button>
+          </div>
+          <div id="groupsList" class="stack"></div>
+        </section>
+        <section class="configFields">
+          <div class="paneHeader">
+            <h4>Campos do grupo</h4>
+            <button id="addFieldBtn" class="btn small" type="button">+ Campo</button>
+          </div>
+          <div id="fieldsList" class="stack"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
