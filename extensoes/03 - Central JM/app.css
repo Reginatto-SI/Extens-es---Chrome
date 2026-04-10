@@ -1,0 +1,143 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f7fb;
+  --panel: #ffffff;
+  --text: #1b2433;
+  --muted: #69758b;
+  --line: #dde4ef;
+  --primary: #0f62fe;
+  --danger: #d93025;
+  --radius: 12px;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+.hidden { display: none !important; }
+.appShell {
+  max-width: 1640px;
+  margin: 0 auto;
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 18px rgba(19, 33, 68, 0.05);
+}
+.topHeader {
+  padding: 16px 18px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.topHeader h1 { margin: 0; font-size: 1.35rem; }
+.topHeader p { margin: 6px 0 0; color: var(--muted); }
+.toolbar {
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 2fr 180px auto;
+  gap: 8px;
+}
+.search,.select,input,textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  font: inherit;
+}
+.contentGrid {
+  display: grid;
+  grid-template-columns: 420px minmax(0,1fr);
+  gap: 14px;
+  min-height: 70vh;
+}
+.recordsPane,.detailsPane { padding: 14px; }
+.paneHeader { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
+.paneHeader h2,.paneHeader h4 { margin: 0; }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #c5d3ef;
+  background: #edf2ff;
+  color: #10316b;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: .82rem;
+}
+.badge.subtle { background: #f6f8fc; border-color: var(--line); color: #4a5976; }
+.btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+  padding: 8px 11px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.btn:hover { background: #f3f6fd; }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.danger { border-color: #f3b7b3; color: #8b231c; }
+.btn.small { padding: 6px 9px; font-size: .85rem; }
+.toolbarActions { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+.recordsList { display: grid; gap: 8px; max-height: calc(70vh - 60px); overflow: auto; padding-right: 4px; }
+.recordCard {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  cursor: pointer;
+  background: #fff;
+}
+.recordCard.active { border-color: #7ea7ff; background: #f4f8ff; }
+.recordCardTitle { font-weight: 600; margin-bottom: 4px; }
+.recordCardMeta { color: var(--muted); font-size: .85rem; }
+.empty, .muted { color: var(--muted); }
+.detailsContent { display: grid; gap: 10px; }
+.groupPanel { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fff; }
+.groupPanel h4 { margin: 0 0 8px; }
+.kv { display: grid; gap: 6px; }
+.kvRow { display: grid; grid-template-columns: 180px 1fr auto; gap: 8px; align-items: center; border-top: 1px dashed #e6edf8; padding-top: 6px; }
+.kvRow:first-child { border-top: 0; padding-top: 0; }
+.kvLabel { color: var(--muted); font-size: .9rem; }
+.kvValue { word-break: break-word; }
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 25, 44, 0.45);
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  z-index: 200;
+}
+.modal {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  width: min(900px, 100%);
+  max-height: 92vh;
+  overflow: auto;
+  padding: 14px;
+}
+.modal.large { width: min(1080px, 100%); }
+.modal.xl { width: min(1240px, 100%); }
+.modalHeader { display: flex; justify-content: space-between; align-items: center; }
+.iconBtn { border: 0; background: transparent; cursor: pointer; font-size: 1.1rem; }
+.formField { display: grid; gap: 4px; margin-bottom: 10px; }
+.dynamicGroups { display: grid; gap: 10px; margin-top: 10px; }
+.dynamicGroup { border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.dynamicGroup h4 { margin: 0 0 8px; }
+.modalFooter { display: flex; align-items: center; gap: 7px; margin-top: 12px; }
+.spacer { flex: 1; }
+.configLayout { display: grid; grid-template-columns: 320px 1fr; gap: 12px; }
+.stack { display: grid; gap: 8px; }
+.listRow { border: 1px solid var(--line); border-radius: 10px; padding: 8px; display: grid; gap: 8px; }
+.rowActions { display: flex; gap: 6px; flex-wrap: wrap; }
+@media (max-width: 1080px) {
+  .toolbar { grid-template-columns: 1fr; }
+  .contentGrid { grid-template-columns: 1fr; }
+  .configLayout { grid-template-columns: 1fr; }
+}
