@@ -40,16 +40,16 @@
 
       <div class="dropzone disabled" id="dropzone">
         <div class="drop-icon">📄</div>
-        <div class="drop-title">Arraste XMLs aqui</div>
+        <div class="drop-title">Arraste XMLs/ZIPs aqui</div>
         <div class="drop-subtitle">ou use os botões abaixo</div>
 
         <div class="upload-actions">
           <label class="btn primary disabled" id="filesTrigger">
-            Selecionar XMLs
+            Selecionar XMLs/ZIP
             <input
               type="file"
               id="filesInput"
-              accept=".xml,text/xml,application/xml"
+              accept=".xml,.zip,text/xml,application/xml,application/zip"
               multiple
               hidden
               disabled
@@ -107,7 +107,7 @@
           <input
             type="search"
             id="searchInput"
-            placeholder="Buscar por chave, emitente, destinatário, CFOP, natureza ou data"
+            placeholder="Buscar por chave, emitente, destinatário, CNPJ/CPF, CFOP, natureza ou data"
           />
         </div>
 
