@@ -26,6 +26,14 @@ Depois disso, a importação dos XMLs é liberada. Os arquivos podem ser adicion
 
 - selecionando arquivos XML manualmente
 - selecionando uma pasta contendo XMLs
+- selecionando arquivo ZIP contendo XMLs
+
+No caso de ZIP:
+
+- XMLs na raiz são lidos normalmente
+- XMLs em subpastas internas também são lidos
+- arquivos internos que não são XML são ignorados
+- o nome do arquivo exibido no resultado preserva o caminho interno do ZIP
 
 A extensão lê cada arquivo XML e procura as principais informações da NF-e, como:
 
@@ -124,6 +132,19 @@ A busca por texto pode localizar informações como:
 - natureza da operação
 - data
 - nome do arquivo
+- CNPJ/CPF de emitente e destinatário (com ou sem pontuação)
+
+Para busca documental específica:
+
+- CPF: quando o termo normalizado possui 11 dígitos
+- CNPJ: quando o termo normalizado possui 14 dígitos
+- fora desses tamanhos, a busca segue apenas textual
+
+## Ordenação dos resultados
+
+- A tabela é ordenada automaticamente por **data de emissão**, da mais recente para a mais antiga.
+- Registros sem data válida ficam no final.
+- Exportação CSV e geração de PDF respeitam a mesma ordem filtrada exibida na tela.
 
 ## Recursos adicionais
 

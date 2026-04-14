@@ -228,51 +228,76 @@ async function handleSelectedFiles(fileList, els) {
     return;
   }
 
-  const files = Array.from(fileList || []).filter((file) =>
-    file.name.toLowerCase().endsWith(".xml")
-  );
+  const selectedFiles = Array.from(fileList || []);
+  const xmlFiles = selectedFiles.filter((file) => file.name.toLowerCase().endsWith(".xml"));
+  const zipFiles = selectedFiles.filter((file) => file.name.toLowerCase().endsWith(".zip"));
 
-  if (!files.length) {
-    alert("Nenhum arquivo XML válido foi selecionado.");
+  if (!xmlFiles.length && !zipFiles.length) {
+    alert("Nenhum arquivo XML/ZIP válido foi selecionado.");
     return;
   }
 
   const parsedResults = [];
   let ignoredFiles = 0;
 
-  for (const [index, file] of files.entries()) {
+  for (const [index, file] of xmlFiles.entries()) {
     if (index > 0 && index % 20 === 0) {
       await pauseToKeepUiResponsive();
     }
 
+    const result = await parseSingleXmlFile({
+      xmlText: await file.text(),
+      filePath: file.webkitRelativePath || file.name,
+      fileName: file.name
+    });
+
+    if (result.ignored) {
+      ignoredFiles += 1;
+      continue;
+    }
+
+    parsedResults.push(result.data);
+  }
+
+  for (const [zipIndex, zipFile] of zipFiles.entries()) {
+    if (zipIndex > 0 && zipIndex % 2 === 0) {
+      await pauseToKeepUiResponsive();
+    }
+
     try {
-      const text = await file.text();
+      const zipEntries = await extractXmlEntriesFromZip(zipFile);
 
-      if (!cleanText(text)) {
+      if (!zipEntries.length) {
         ignoredFiles += 1;
         continue;
       }
 
-      const result = parseNFeXml(
-        text,
-        file.webkitRelativePath || file.name,
-        state.analysisType
-      );
+      for (const [entryIndex, entry] of zipEntries.entries()) {
+        if (entryIndex > 0 && entryIndex % 20 === 0) {
+          await pauseToKeepUiResponsive();
+        }
 
-      if (!result) {
-        ignoredFiles += 1;
-        continue;
+        const zipInternalPath = `${zipFile.name}/${entry.path}`;
+        const result = await parseSingleXmlFile({
+          xmlText: entry.text,
+          filePath: zipInternalPath,
+          fileName: zipInternalPath
+        });
+
+        if (result.ignored) {
+          ignoredFiles += 1;
+          continue;
+        }
+
+        parsedResults.push(result.data);
       }
-
-      parsedResults.push(result);
     } catch (error) {
-      console.error(`Erro ao processar ${file.name}:`, error);
-
+      console.error(`Erro ao processar ZIP ${zipFile.name}:`, error);
       parsedResults.push(
         buildErrorResult({
-          fileName: file.webkitRelativePath || file.name,
+          fileName: zipFile.name,
           analysisType: state.analysisType,
-          problemas: [`Erro ao processar arquivo: ${error.message || error}`]
+          problemas: [`Arquivo ZIP inválido/corrompido: ${error.message || error}`]
         })
       );
     }
@@ -286,6 +311,32 @@ async function handleSelectedFiles(fileList, els) {
 
   if (!parsedResults.length && ignoredFiles > 0) {
     alert("Os arquivos selecionados foram ignorados porque não continham uma NF-e utilizável.");
+  }
+}
+
+async function parseSingleXmlFile({ xmlText, filePath, fileName }) {
+  try {
+    if (!cleanText(xmlText)) {
+      return { ignored: true, data: null };
+    }
+
+    const result = parseNFeXml(xmlText, filePath, state.analysisType);
+
+    if (!result) {
+      return { ignored: true, data: null };
+    }
+
+    return { ignored: false, data: result };
+  } catch (error) {
+    console.error(`Erro ao processar ${fileName}:`, error);
+    return {
+      ignored: false,
+      data: buildErrorResult({
+        fileName: filePath,
+        analysisType: state.analysisType,
+        problemas: [`Erro ao processar arquivo: ${error.message || error}`]
+      })
+    };
   }
 }
 
@@ -315,6 +366,8 @@ function parseNFeXml(xmlText, fileName, analysisType) {
   const chave = cleanText((infNFe.getAttribute("Id") || "").replace(/^NFe/i, ""));
   const emitente = getTextByLocalName(emit, "xNome");
   const destinatario = getTextByLocalName(dest, "xNome");
+  const emitenteDocumento = getTextByLocalName(emit, "CNPJ") || getTextByLocalName(emit, "CPF");
+  const destinatarioDocumento = getTextByLocalName(dest, "CNPJ") || getTextByLocalName(dest, "CPF");
   const natureza = getTextByLocalName(ide, "natOp");
 
   const dataEmissaoRaw =
@@ -368,6 +421,10 @@ function parseNFeXml(xmlText, fileName, analysisType) {
     dataEmissaoFiltro,
     emitente,
     destinatario,
+    emitenteDocumento,
+    destinatarioDocumento,
+    emitenteDocumentoDigits: normalizeDigits(emitenteDocumento),
+    destinatarioDocumentoDigits: normalizeDigits(destinatarioDocumento),
     arquivo: fileName,
     natureza,
     cfops,
@@ -548,6 +605,10 @@ function buildErrorResult({ fileName, analysisType, problemas = [] }) {
     dataEmissaoFiltro: "",
     emitente: "",
     destinatario: "",
+    emitenteDocumento: "",
+    destinatarioDocumento: "",
+    emitenteDocumentoDigits: "",
+    destinatarioDocumentoDigits: "",
     arquivo: fileName,
     natureza: "",
     cfops: [],
@@ -570,7 +631,9 @@ function formatAnalysisType(value) {
 }
 
 function applyFilters(els) {
-  const search = normalizeText(els.searchInput.value.trim());
+  const rawSearch = els.searchInput.value.trim();
+  const search = normalizeText(rawSearch);
+  const searchDigits = normalizeDigits(rawSearch);
   const onlyErrors = els.onlyErrorsToggle.checked;
   const startDate = els.startDate.value;
   const endDate = els.endDate.value;
@@ -585,6 +648,8 @@ function applyFilters(els) {
         item.dataEmissao,
         item.emitente,
         item.destinatario,
+        item.emitenteDocumento,
+        item.destinatarioDocumento,
         item.arquivo,
         item.natureza,
         (item.cfops || []).join(" "),
@@ -595,11 +660,22 @@ function applyFilters(els) {
       ].join(" ")
     );
 
-    const matchesSearch = !search || haystack.includes(search);
+    // Busca documental específica somente para CPF (11) e CNPJ (14).
+    // Fora desses comprimentos, a busca permanece exclusivamente textual.
+    const hasNumericSearch = searchDigits.length === 11 || searchDigits.length === 14;
+    const matchesDocumentDigits =
+      !hasNumericSearch ||
+      item.emitenteDocumentoDigits.includes(searchDigits) ||
+      item.destinatarioDocumentoDigits.includes(searchDigits);
+
+    const matchesSearch =
+      !search || haystack.includes(search) || (hasNumericSearch && matchesDocumentDigits);
     const matchesDate = matchesDateRange(item.dataEmissaoFiltro, startDate, endDate);
 
     return matchesError && matchesSearch && matchesDate;
   });
+
+  sortResultsByEmissionDateDesc(state.filteredResults);
 
   renderTable(els);
   updateStats(els);
@@ -855,6 +931,10 @@ function normalizeText(value) {
     .toLowerCase();
 }
 
+function normalizeDigits(value) {
+  return String(value || "").replace(/\D+/g, "");
+}
+
 function formatDateTime(date) {
   return new Intl.DateTimeFormat("pt-BR", {
     dateStyle: "short",
@@ -914,6 +994,42 @@ function formatNFeDateForFilter(value) {
   return `${year}-${month}-${day}`;
 }
 
+function parseNFeDateToTimestamp(value) {
+  const text = cleanText(value);
+
+  if (!text) {
+    return null;
+  }
+
+  const parsed = new Date(text);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.getTime();
+  }
+
+  const onlyDateMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!onlyDateMatch) {
+    return null;
+  }
+
+  const [, year, month, day] = onlyDateMatch;
+  return Date.UTC(Number(year), Number(month) - 1, Number(day));
+}
+
+function sortResultsByEmissionDateDesc(rows = []) {
+  // Fonte oficial da ordenação: dataEmissaoRaw (valor bruto do XML).
+  // dataEmissaoFiltro é usado para filtro por intervalo e dataEmissao para exibição.
+  rows.sort((a, b) => {
+    const aTs = parseNFeDateToTimestamp(a.dataEmissaoRaw);
+    const bTs = parseNFeDateToTimestamp(b.dataEmissaoRaw);
+
+    if (aTs == null && bTs == null) return 0;
+    if (aTs == null) return 1;
+    if (bTs == null) return -1;
+
+    return bTs - aTs;
+  });
+}
+
 function formatCurrencyBr(value) {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -930,6 +1046,107 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+async function extractXmlEntriesFromZip(zipFile) {
+  // Implementação local para ZIP: mantém a extensão autocontida, sem CDN.
+  // Limitação conhecida: suporta ZIP padrão com métodos STORE(0) e DEFLATE(8).
+  const zipBuffer = await zipFile.arrayBuffer();
+  const view = new DataView(zipBuffer);
+  const eocdOffset = findEndOfCentralDirectory(view);
+
+  if (eocdOffset < 0) {
+    throw new Error("Estrutura ZIP não reconhecida (EOCD ausente).");
+  }
+
+  const totalEntries = view.getUint16(eocdOffset + 10, true);
+  const centralDirectoryOffset = view.getUint32(eocdOffset + 16, true);
+  const decoder = new TextDecoder("utf-8");
+  const xmlEntries = [];
+
+  let cursor = centralDirectoryOffset;
+
+  for (let i = 0; i < totalEntries; i += 1) {
+    if (view.getUint32(cursor, true) !== 0x02014b50) {
+      throw new Error("Cabeçalho central do ZIP inválido/corrompido.");
+    }
+
+    const compressionMethod = view.getUint16(cursor + 10, true);
+    const compressedSize = view.getUint32(cursor + 20, true);
+    const fileNameLength = view.getUint16(cursor + 28, true);
+    const extraLength = view.getUint16(cursor + 30, true);
+    const commentLength = view.getUint16(cursor + 32, true);
+    const localHeaderOffset = view.getUint32(cursor + 42, true);
+    const fileNameStart = cursor + 46;
+    const fileNameEnd = fileNameStart + fileNameLength;
+    const entryName = decoder.decode(zipBuffer.slice(fileNameStart, fileNameEnd));
+
+    cursor = fileNameEnd + extraLength + commentLength;
+
+    if (!entryName || entryName.endsWith("/") || !entryName.toLowerCase().endsWith(".xml")) {
+      continue;
+    }
+
+    const fileData = await getZipEntryData(
+      view,
+      zipBuffer,
+      localHeaderOffset,
+      compressedSize,
+      compressionMethod
+    );
+    const xmlText = decoder.decode(fileData);
+
+    xmlEntries.push({
+      path: entryName,
+      text: xmlText
+    });
+  }
+
+  return xmlEntries;
+}
+
+function findEndOfCentralDirectory(view) {
+  for (let i = view.byteLength - 22; i >= 0; i -= 1) {
+    if (view.getUint32(i, true) === 0x06054b50) {
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+async function getZipEntryData(view, zipBuffer, localHeaderOffset, compressedSize, compressionMethod) {
+  if (view.getUint32(localHeaderOffset, true) !== 0x04034b50) {
+    throw new Error("Cabeçalho local do ZIP inválido/corrompido.");
+  }
+
+  const fileNameLength = view.getUint16(localHeaderOffset + 26, true);
+  const extraFieldLength = view.getUint16(localHeaderOffset + 28, true);
+  const dataStart = localHeaderOffset + 30 + fileNameLength + extraFieldLength;
+  const dataEnd = dataStart + compressedSize;
+  const compressedData = new Uint8Array(zipBuffer.slice(dataStart, dataEnd));
+
+  if (compressionMethod === 0) {
+    return compressedData;
+  }
+
+  if (compressionMethod === 8) {
+    return inflateRaw(compressedData);
+  }
+
+  throw new Error(
+    `Método de compressão ZIP não suportado (${compressionMethod}). Suportado: STORE(0) e DEFLATE(8).`
+  );
+}
+
+async function inflateRaw(compressedData) {
+  if (typeof DecompressionStream !== "function") {
+    throw new Error("Navegador sem suporte para descompressão ZIP (deflate).");
+  }
+
+  const stream = new Blob([compressedData]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  const buffer = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buffer);
 }
 
 function exportCsv(rows) {

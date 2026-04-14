@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Validador NF-e IBS/CBS",
-  "version": "1.3.0",
+  "version": "1.8.0",
   "description": "Valida XMLs de NF-e e identifica notas sem IBS/CBS ou fora da estrutura esperada.",
   "permissions": [
     "storage"
