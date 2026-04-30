@@ -28,6 +28,9 @@
 
     <section class="card">
       <h2>2) Ação</h2>
+      <label class="fieldLabel" for="headerRowInput">Linha do cabeçalho</label>
+      <input id="headerRowInput" class="numberInput" type="number" min="1" value="1" />
+      <p class="fieldHelp">Informe a linha onde começam os cabeçalhos das colunas. O primeiro arquivo carregado será usado como modelo.</p>
       <button id="mergeBtn" class="btn primary" type="button">Unificar arquivos</button>
       <div id="progressWrapper" class="progressWrapper hidden">
         <div class="progressInfo">
@@ -43,6 +46,11 @@
     <section class="card">
       <h2>3) Resultado</h2>
       <p id="statusMessage" class="statusMessage">Aguardando arquivos para processamento.</p>
+    </section>
+
+    <section id="divergencePanel" class="card hidden">
+      <h2>Divergências encontradas</h2>
+      <ul id="divergenceList" class="divergenceList"></ul>
     </section>
 
     <section class="card">
