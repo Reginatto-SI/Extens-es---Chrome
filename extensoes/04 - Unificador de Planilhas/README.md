@@ -5,14 +5,19 @@ Extensão Chrome para unificar múltiplos arquivos `.xlsx` em um único arquivo 
 ## Como usar
 1. Abra a extensão.
 2. Selecione ou arraste arquivos `.xlsx`.
-3. Clique em **Unificar arquivos**.
-4. Acompanhe o progresso por arquivo (texto + barra de progresso).
-5. Ao concluir, use o modal para **Baixar arquivo consolidado**.
+3. Informe **Linha do cabeçalho** (padrão `1`).
+4. Clique em **Unificar arquivos**.
+5. A extensão valida as colunas usando o primeiro arquivo como referência.
+6. Se não houver divergências, acompanhe o progresso e baixe no modal de conclusão.
 
 ## Regras
 - Lê somente a primeira aba de cada arquivo.
 - Mantém a ordem dos arquivos carregados.
+- Usa o primeiro arquivo carregado como modelo de colunas.
+- Compara quantidade, nomes e ordem das colunas na linha de cabeçalho informada.
+- Se houver divergência, bloqueia a unificação e mostra os arquivos fora do padrão.
 - Não remove cabeçalhos duplicados.
+- Não corrige arquivos divergentes automaticamente.
 - Não faz normalização, deduplicação ou limpeza.
 - Preserva o conteúdo visual exibido no Excel (datas, moeda e textos formatados).
 

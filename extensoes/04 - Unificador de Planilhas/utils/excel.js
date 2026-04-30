@@ -5,6 +5,10 @@ function ensureXlsxLoaded() {
   }
 }
 
+function normalizeHeaderCell(value) {
+  return String(value ?? "").trim();
+}
+
 window.ExcelUtils = {
   async readFilesAsRows(files, onProgress) {
     ensureXlsxLoaded();
@@ -34,6 +38,97 @@ window.ExcelUtils = {
     }
 
     return allRows;
+  },
+
+  getHeaderRowFromWorksheet(worksheet, headerRowIndex) {
+    const rows = XLSX.utils.sheet_to_json(worksheet, {
+      header: 1,
+      raw: false,
+      defval: ""
+    });
+    const headerRow = rows[headerRowIndex] || [];
+    return headerRow.map(normalizeHeaderCell);
+  },
+
+  compareHeaders(referenceHeader, currentHeader) {
+    const expectedColumns = referenceHeader.length;
+    const foundColumns = currentHeader.length;
+    const maxLength = Math.max(expectedColumns, foundColumns);
+    const differences = [];
+
+    for (let i = 0; i < maxLength; i += 1) {
+      const expected = referenceHeader[i] ?? "";
+      const found = currentHeader[i] ?? "";
+
+      if (i >= expectedColumns && found) {
+        differences.push({ index: i, expected: "", found, type: "extra" });
+      } else if (i >= foundColumns && expected) {
+        differences.push({ index: i, expected, found: "", type: "missing" });
+      } else if (expected !== found) {
+        differences.push({ index: i, expected, found, type: "different" });
+      }
+    }
+
+    return {
+      valid: differences.length === 0,
+      expectedColumns,
+      foundColumns,
+      differences
+    };
+  },
+
+  async validateFilesHeaders(files, headerRowNumber, onLog) {
+    ensureXlsxLoaded();
+    const headerRowIndex = headerRowNumber - 1;
+    const invalidFiles = [];
+    let referenceHeader = [];
+
+    for (let i = 0; i < files.length; i += 1) {
+      const file = files[i];
+      const data = await this.readFileAsArrayBuffer(file);
+      const workbook = XLSX.read(data, { type: "array", cellDates: false });
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      const currentHeader = this.getHeaderRowFromWorksheet(worksheet, headerRowIndex);
+
+      if (i === 0) {
+        referenceHeader = currentHeader;
+        onLog?.(`Arquivo referência: ${file.name}`);
+        onLog?.(`Linha de cabeçalho configurada: ${headerRowNumber}`);
+        onLog?.(`Quantidade de colunas do arquivo referência: ${referenceHeader.length}`);
+        continue;
+      }
+
+      const comparison = this.compareHeaders(referenceHeader, currentHeader);
+      if (comparison.valid) {
+        onLog?.(`${file.name} validado com sucesso.`, "success");
+      } else {
+        const firstDifference = comparison.differences[0];
+        const position = firstDifference ? firstDifference.index + 1 : 0;
+        onLog?.(`${file.name} fora do padrão: divergência na coluna ${position}.`, "error");
+        comparison.differences.forEach((difference) => {
+          const columnPosition = difference.index + 1;
+          if (difference.type === "different") {
+            onLog?.(`Divergência na coluna ${columnPosition}: esperado "${difference.expected}" e encontrado "${difference.found}".`);
+          } else if (difference.type === "extra") {
+            onLog?.(`Coluna extra encontrada na posição ${columnPosition}: ${difference.found}.`);
+          } else {
+            onLog?.(`Coluna ausente na posição ${columnPosition}. Esperado: ${difference.expected}.`);
+          }
+        });
+
+        invalidFiles.push({
+          fileName: file.name,
+          result: comparison
+        });
+      }
+    }
+
+    return {
+      valid: invalidFiles.length === 0,
+      invalidFiles,
+      headerRowNumber
+    };
   },
 
   readFileAsArrayBuffer(file) {

@@ -15,6 +15,9 @@ const completionModal = document.getElementById("completionModal");
 const modalSummary = document.getElementById("modalSummary");
 const modalDownloadBtn = document.getElementById("modalDownloadBtn");
 const closeModalBtn = document.getElementById("closeModalBtn");
+const headerRowInput = document.getElementById("headerRowInput");
+const divergencePanel = document.getElementById("divergencePanel");
+const divergenceList = document.getElementById("divergenceList");
 
 let selectedFiles = [];
 let mergedWorkbook = null;
@@ -66,10 +69,35 @@ mergeBtn.addEventListener("click", async () => {
     return;
   }
 
+  const headerRowNumber = Number(headerRowInput.value);
+  if (!Number.isInteger(headerRowNumber) || headerRowNumber < 1) {
+    setStatus("Informe uma linha de cabeçalho válida (mínimo 1).", "error");
+    addLog("Linha de cabeçalho inválida informada.", "error");
+    return;
+  }
+
   startProcessingState();
   addLog("Iniciando processamento.");
+  hideDivergences();
 
   try {
+    const validationResult = await window.ExcelUtils.validateFilesHeaders(selectedFiles, headerRowNumber, (message, type = "info") => {
+      addLog(message, type);
+    });
+
+    if (!validationResult.valid) {
+      mergedWorkbook = null;
+      processedFilesCount = 0;
+      mergedRowsCount = 0;
+      updateProgress("Validação interrompeu a unificação", 0);
+      setStatus("Arquivos com divergência de colunas. Corrija antes de unificar.", "error");
+      addLog("Unificação bloqueada por divergência de colunas.", "error");
+      renderDivergences(validationResult.invalidFiles);
+      return;
+    }
+
+    addLog("Validação de colunas concluída: todos os arquivos seguem o padrão.", "success");
+
     const rows = await window.ExcelUtils.readFilesAsRows(selectedFiles, ({ current, total, percent, fileName }) => {
       processedFilesCount = current;
       addLog(`Processando ${fileName}.`);
@@ -128,6 +156,7 @@ function setFiles(files) {
   mergedWorkbook = null;
   processedFilesCount = 0;
   mergedRowsCount = 0;
+  hideDivergences();
   closeCompletionModal();
   resetProgress();
   renderFileList();
@@ -149,6 +178,40 @@ function renderFileList() {
     item.textContent = file.name;
     fileList.appendChild(item);
   });
+}
+
+function renderDivergences(invalidFiles) {
+  divergenceList.innerHTML = "";
+
+  invalidFiles.forEach((entry) => {
+    const item = document.createElement("li");
+    item.className = "divergenceItem";
+    const differencesPreview = entry.result.differences.slice(0, 3).map((difference) => {
+      const position = difference.index + 1;
+      if (difference.type === "different") {
+        return `Coluna ${position}: esperado \"${difference.expected}\" e encontrado \"${difference.found}\"`;
+      }
+      if (difference.type === "extra") {
+        return `Coluna extra na posição ${position}: \"${difference.found}\"`;
+      }
+      return `Coluna ausente na posição ${position}: esperado \"${difference.expected}\"`;
+    });
+
+    item.innerHTML = `
+      <strong>${entry.fileName}</strong>
+      <div>Tipo: divergência de estrutura de colunas</div>
+      <div>Colunas esperadas: ${entry.result.expectedColumns} • Colunas encontradas: ${entry.result.foundColumns}</div>
+      <ul>${differencesPreview.map((text) => `<li>${text}</li>`).join("")}</ul>
+    `;
+    divergenceList.appendChild(item);
+  });
+
+  divergencePanel.classList.remove("hidden");
+}
+
+function hideDivergences() {
+  divergenceList.innerHTML = "";
+  divergencePanel.classList.add("hidden");
 }
 
 function setStatus(message, type) {
