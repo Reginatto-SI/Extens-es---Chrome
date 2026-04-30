@@ -13,7 +13,7 @@
         <h1>Unificador de Planilhas</h1>
         <p>Carregue arquivos .xlsx e gere um único arquivo consolidado por concatenação.</p>
       </div>
-      <span class="badge" id="versionBadge">v1.0.0</span>
+      <span class="badge" id="versionBadge">v1.0.1</span>
     </header>
 
     <section class="card">
@@ -29,6 +29,15 @@
     <section class="card">
       <h2>2) Ação</h2>
       <button id="mergeBtn" class="btn primary" type="button">Unificar arquivos</button>
+      <div id="progressWrapper" class="progressWrapper hidden">
+        <div class="progressInfo">
+          <span id="progressText">Aguardando processamento...</span>
+          <span id="progressPercent">0%</span>
+        </div>
+        <div class="progressBar">
+          <div id="progressFill" class="progressFill" style="width: 0%"></div>
+        </div>
+      </div>
     </section>
 
     <section class="card">

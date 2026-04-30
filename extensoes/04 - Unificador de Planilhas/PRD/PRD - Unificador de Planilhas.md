@@ -15,8 +15,9 @@ Permitir que o usuário carregue múltiplos arquivos Excel `.xlsx` e gere um ún
 3. Sistema lista os arquivos carregados.
 4. Usuário clica em **Unificar arquivos**.
 5. Sistema processa os arquivos em sequência.
-6. Sistema exibe sucesso ou erro.
-7. Usuário clica em **Baixar arquivo**.
+6. Sistema exibe progresso por quantidade de arquivos (texto + barra).
+7. Sistema exibe sucesso ou erro.
+8. Usuário clica em **Baixar arquivo**.
 
 ## 4) Regras de negócio
 - Aceitar apenas arquivos `.xlsx`.
@@ -25,6 +26,7 @@ Permitir que o usuário carregue múltiplos arquivos Excel `.xlsx` e gere um ún
 - Concatenar os dados exatamente como lidos (append).
 - Não remover cabeçalhos duplicados.
 - Não interpretar estrutura de colunas.
+- Preservar conteúdo visual do Excel na leitura (datas, valores monetários e textos formatados).
 
 ## 5) Limitações claras
 - Não há normalização de dados.
@@ -32,6 +34,7 @@ Permitir que o usuário carregue múltiplos arquivos Excel `.xlsx` e gere um ún
 - Não há limpeza de conteúdo.
 - Não há tratamento de incompatibilidades entre formatos de linha.
 - Não há preview de dados.
+- O progresso é estimado por arquivos concluídos, não por célula/linha processada.
 
 ## 6) Fora de escopo (sem overengineering)
 - Mapeamento inteligente de colunas.
