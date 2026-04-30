@@ -18,7 +18,7 @@ body {
   color: var(--text);
   background: var(--bg);
 }
-.hidden { display: none; }
+.hidden { display: none !important; }
 .appShell {
   max-width: 980px;
   margin: 0 auto;
