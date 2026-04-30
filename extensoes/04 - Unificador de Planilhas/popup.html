@@ -13,7 +13,7 @@
         <h1>Unificador de Planilhas</h1>
         <p>Carregue arquivos .xlsx e gere um único arquivo consolidado por concatenação.</p>
       </div>
-      <span class="badge" id="versionBadge">v1.0.1</span>
+      <span class="badge" id="versionBadge">v1.0.2</span>
     </header>
 
     <section class="card">
@@ -43,11 +43,31 @@
     <section class="card">
       <h2>3) Resultado</h2>
       <p id="statusMessage" class="statusMessage">Aguardando arquivos para processamento.</p>
-      <button id="downloadBtn" class="btn success" type="button" disabled>Baixar arquivo</button>
+    </section>
+
+    <section class="card">
+      <div class="consoleHeader">
+        <h2>Console de processamento</h2>
+        <button id="clearConsoleBtn" class="btn" type="button">Limpar console</button>
+      </div>
+      <div id="consoleLog" class="consoleLog"></div>
     </section>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <div id="completionModal" class="modalOverlay hidden" aria-hidden="true">
+    <div class="modalCard">
+      <h3>Unificação concluída</h3>
+      <p>O arquivo consolidado foi gerado com sucesso.</p>
+      <p id="modalSummary" class="modalSummary">Arquivos processados: 0 • Linhas consolidadas: 0</p>
+      <div class="modalActions">
+        <button id="modalDownloadBtn" class="btn success" type="button">Baixar arquivo consolidado</button>
+        <button id="closeModalBtn" class="btn" type="button">Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manifest V3 exige script local (script-src 'self'), por isso a biblioteca XLSX é carregada da pasta vendor. -->
+  <script src="vendor/xlsx.full.min.js"></script>
   <script src="utils/excel.js"></script>
   <script src="popup.js"></script>
 </body>

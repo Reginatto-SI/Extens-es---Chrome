@@ -16,8 +16,7 @@ Permitir que o usuário carregue múltiplos arquivos Excel `.xlsx` e gere um ún
 4. Usuário clica em **Unificar arquivos**.
 5. Sistema processa os arquivos em sequência.
 6. Sistema exibe progresso por quantidade de arquivos (texto + barra).
-7. Sistema exibe sucesso ou erro.
-8. Usuário clica em **Baixar arquivo**.
+7. Sistema exibe modal de conclusão com botão de download.
 
 ## 4) Regras de negócio
 - Aceitar apenas arquivos `.xlsx`.
@@ -36,7 +35,12 @@ Permitir que o usuário carregue múltiplos arquivos Excel `.xlsx` e gere um ún
 - Não há preview de dados.
 - O progresso é estimado por arquivos concluídos, não por célula/linha processada.
 
-## 6) Fora de escopo (sem overengineering)
+## 6) Premissas técnicas
+- A biblioteca XLSX deve ser local (`vendor/xlsx.full.min.js`) para respeitar as regras de segurança do Manifest V3.
+- Deve existir console interno para facilitar diagnóstico de processamento.
+- A conclusão do fluxo deve priorizar modal com ação principal de download.
+
+## 7) Fora de escopo (sem overengineering)
 - Mapeamento inteligente de colunas.
 - União por chave de negócio.
 - Regras de validação complexas.

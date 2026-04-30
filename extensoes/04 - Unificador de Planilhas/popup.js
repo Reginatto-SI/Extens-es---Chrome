@@ -3,27 +3,42 @@ const dropZone = document.getElementById("dropZone");
 const fileList = document.getElementById("fileList");
 const selectFilesBtn = document.getElementById("selectFilesBtn");
 const mergeBtn = document.getElementById("mergeBtn");
-const downloadBtn = document.getElementById("downloadBtn");
 const statusMessage = document.getElementById("statusMessage");
 const versionBadge = document.getElementById("versionBadge");
 const progressWrapper = document.getElementById("progressWrapper");
 const progressText = document.getElementById("progressText");
 const progressPercent = document.getElementById("progressPercent");
 const progressFill = document.getElementById("progressFill");
+const consoleLog = document.getElementById("consoleLog");
+const clearConsoleBtn = document.getElementById("clearConsoleBtn");
+const completionModal = document.getElementById("completionModal");
+const modalSummary = document.getElementById("modalSummary");
+const modalDownloadBtn = document.getElementById("modalDownloadBtn");
+const closeModalBtn = document.getElementById("closeModalBtn");
 
 let selectedFiles = [];
 let mergedWorkbook = null;
 let isProcessing = false;
+let processedFilesCount = 0;
+let mergedRowsCount = 0;
 
 const defaultMergeLabel = "Unificar arquivos";
 
 versionBadge.textContent = `v${chrome.runtime.getManifest().version}`;
+addLog(`Extensão iniciada - v${chrome.runtime.getManifest().version}`);
+addLog(`Versão carregada: ${chrome.runtime.getManifest().version}`);
+
 chrome.storage.local.set({
   extensionVersion: chrome.runtime.getManifest().version,
   extensionUpdatedAt: new Date().toISOString()
 });
 
 selectFilesBtn.addEventListener("click", () => fileInput.click());
+clearConsoleBtn.addEventListener("click", () => {
+  consoleLog.innerHTML = "";
+  addLog("Console limpo pelo usuário.", "warning");
+});
+
 fileInput.addEventListener("change", (event) => {
   setFiles(Array.from(event.target.files));
 });
@@ -47,55 +62,72 @@ mergeBtn.addEventListener("click", async () => {
 
   if (!selectedFiles.length) {
     setStatus("Selecione ao menos um arquivo .xlsx para unificar.", "error");
+    addLog("Tentativa de processar sem arquivos selecionados.", "warning");
     return;
   }
 
   startProcessingState();
+  addLog("Iniciando processamento.");
 
   try {
-    setStatus("Iniciando processamento dos arquivos...", "");
-
     const rows = await window.ExcelUtils.readFilesAsRows(selectedFiles, ({ current, total, percent, fileName }) => {
+      processedFilesCount = current;
+      addLog(`Processando ${fileName}.`);
       updateProgress(`Processando ${fileName} — ${current} de ${total} arquivos (${percent}%)`, percent);
+      addLog(`${fileName} processado com sucesso.`, "success");
     });
 
     mergedWorkbook = window.ExcelUtils.generateWorkbookFromRows(rows);
-    downloadBtn.disabled = false;
-    setStatus("Unificação concluída com sucesso. Arquivo pronto para download.", "success");
+    mergedRowsCount = rows.length;
+    updateProgress("100% - Concluído", 100);
+    setStatus("Arquivo pronto para download.", "success");
+    addLog("Conclusão da unificação.", "success");
+    openCompletionModal();
   } catch (error) {
     mergedWorkbook = null;
-    downloadBtn.disabled = true;
+    if (!processedFilesCount) {
+      updateProgress("Erro antes do processamento dos arquivos", 0);
+    }
     setStatus(`Erro ao processar arquivos: ${error.message || "falha inesperada."}`, "error");
+    addLog(`Erro ao processar arquivo: ${error.message || "falha inesperada."}`, "error");
   } finally {
     finishProcessingState();
   }
 });
 
-downloadBtn.addEventListener("click", () => {
+modalDownloadBtn.addEventListener("click", handleDownload);
+closeModalBtn.addEventListener("click", closeCompletionModal);
+
+function handleDownload() {
   if (!mergedWorkbook) {
     setStatus("Nenhum arquivo gerado para download.", "error");
+    addLog("Download bloqueado: arquivo consolidado não encontrado.", "error");
     return;
   }
 
+  addLog("Download iniciado.", "success");
   window.ExcelUtils.downloadWorkbook(mergedWorkbook, "planilhas-unificadas.xlsx");
-});
+}
 
 function setFiles(files) {
   if (isProcessing) return;
 
-  // Regra obrigatória: aceitar apenas arquivos .xlsx.
   selectedFiles = files.filter((file) => file.name.toLowerCase().endsWith(".xlsx"));
   mergedWorkbook = null;
-  downloadBtn.disabled = true;
+  processedFilesCount = 0;
+  mergedRowsCount = 0;
+  closeCompletionModal();
   resetProgress();
   renderFileList();
 
   if (!selectedFiles.length) {
     setStatus("Nenhum arquivo .xlsx válido selecionado.", "error");
+    addLog("Nenhum arquivo .xlsx válido selecionado.", "warning");
     return;
   }
 
   setStatus(`${selectedFiles.length} arquivo(s) carregado(s) para unificação.`, "");
+  addLog(`${selectedFiles.length} arquivo(s) selecionado(s).`);
 }
 
 function renderFileList() {
@@ -128,16 +160,36 @@ function resetProgress() {
 }
 
 function startProcessingState() {
-  // Bloqueia clique duplicado e deixa explícito que a unificação está em andamento.
+  // Bloqueio do botão para evitar múltiplos cliques durante processamento.
   isProcessing = true;
   mergeBtn.disabled = true;
   mergeBtn.textContent = "Processando...";
-  downloadBtn.disabled = true;
-  updateProgress("Iniciando processamento dos arquivos...", 0);
+  processedFilesCount = 0;
+  updateProgress("0% - Iniciando processamento", 0);
 }
 
 function finishProcessingState() {
   isProcessing = false;
   mergeBtn.disabled = false;
   mergeBtn.textContent = defaultMergeLabel;
+}
+
+// Console interno para diagnóstico simples de processamento.
+function addLog(message, type = "info") {
+  const time = new Date().toLocaleTimeString("pt-BR");
+  const line = document.createElement("div");
+  line.className = `logLine ${type}`;
+  line.textContent = `[${time}] ${message}`;
+  consoleLog.appendChild(line);
+  consoleLog.scrollTop = consoleLog.scrollHeight;
+}
+
+// Modal de conclusão como ponto principal do download após sucesso.
+function openCompletionModal() {
+  modalSummary.textContent = `Arquivos processados: ${processedFilesCount} • Linhas consolidadas: ${mergedRowsCount}`;
+  completionModal.classList.remove("hidden");
+}
+
+function closeCompletionModal() {
+  completionModal.classList.add("hidden");
 }
