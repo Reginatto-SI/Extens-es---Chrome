@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Unificador de Planilhas",
+  "version": "1.0.1",
+  "description": "Une múltiplas planilhas .xlsx em um único arquivo por concatenação simples.",
+  "permissions": [
+    "tabs",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Unificador de Planilhas"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "popup.html",
+        "popup.js",
+        "styles.css",
+        "utils/excel.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}
