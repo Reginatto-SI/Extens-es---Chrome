@@ -79,10 +79,17 @@ mergeBtn.addEventListener("click", async () => {
 
     mergedWorkbook = window.ExcelUtils.generateWorkbookFromRows(rows);
     mergedRowsCount = rows.length;
-    updateProgress("100% - Concluído", 100);
-    setStatus("Arquivo pronto para download.", "success");
-    addLog("Conclusão da unificação.", "success");
-    openCompletionModal();
+
+    if (mergedWorkbook && selectedFiles.length > 0 && mergedRowsCount > 0) {
+      updateProgress("100% - Concluído", 100);
+      setStatus("Arquivo pronto para download.", "success");
+      addLog("Conclusão da unificação.", "success");
+      openCompletionModal();
+    } else {
+      mergedWorkbook = null;
+      setStatus("Não foi possível concluir a unificação: nenhum dado válido foi consolidado.", "error");
+      addLog("Unificação sem dados válidos: modal de sucesso não exibido.", "warning");
+    }
   } catch (error) {
     mergedWorkbook = null;
     if (!processedFilesCount) {
@@ -97,6 +104,11 @@ mergeBtn.addEventListener("click", async () => {
 
 modalDownloadBtn.addEventListener("click", handleDownload);
 closeModalBtn.addEventListener("click", closeCompletionModal);
+completionModal.addEventListener("click", (event) => {
+  if (event.target === completionModal) {
+    closeCompletionModal();
+  }
+});
 
 function handleDownload() {
   if (!mergedWorkbook) {
