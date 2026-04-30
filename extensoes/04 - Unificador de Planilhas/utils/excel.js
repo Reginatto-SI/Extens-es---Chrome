@@ -1,0 +1,47 @@
+// Utilitários de leitura e geração de planilhas com comportamento simples e determinístico.
+window.ExcelUtils = {
+  async readFilesAsRows(files) {
+    const allRows = [];
+
+    // Mantém a ordem exata recebida, lendo cada arquivo em sequência.
+    for (const file of files) {
+      const data = await this.readFileAsArrayBuffer(file);
+      // Usa cellDates: false para evitar conversões automáticas para Date.
+      const workbook = XLSX.read(data, {
+        type: "array",
+        cellDates: false
+      });
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      // Usa raw: false para preservar o valor formatado exibido no Excel.
+      const rows = XLSX.utils.sheet_to_json(worksheet, {
+        header: 1,
+        raw: false,
+        defval: ""
+      });
+      allRows.push(...rows);
+    }
+
+    return allRows;
+  },
+
+  readFileAsArrayBuffer(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => resolve(event.target.result);
+      reader.onerror = () => reject(new Error(`Falha ao ler o arquivo: ${file.name}`));
+      reader.readAsArrayBuffer(file);
+    });
+  },
+
+  generateWorkbookFromRows(rows) {
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.aoa_to_sheet(rows);
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Unificado");
+    return workbook;
+  },
+
+  downloadWorkbook(workbook, filename) {
+    XLSX.writeFile(workbook, filename);
+  }
+};

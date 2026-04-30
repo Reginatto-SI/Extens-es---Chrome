@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Unificador de Planilhas</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="appShell">
+    <header class="card header">
+      <div>
+        <h1>Unificador de Planilhas</h1>
+        <p>Carregue arquivos .xlsx e gere um único arquivo consolidado por concatenação.</p>
+      </div>
+      <span class="badge" id="versionBadge">v1.0.0</span>
+    </header>
+
+    <section class="card">
+      <h2>1) Upload</h2>
+      <div id="dropZone" class="dropZone">
+        <p>Arraste arquivos .xlsx para esta área</p>
+        <button id="selectFilesBtn" class="btn" type="button">Selecionar arquivos</button>
+        <input id="fileInput" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple hidden />
+      </div>
+      <ul id="fileList" class="fileList"></ul>
+    </section>
+
+    <section class="card">
+      <h2>2) Ação</h2>
+      <button id="mergeBtn" class="btn primary" type="button">Unificar arquivos</button>
+    </section>
+
+    <section class="card">
+      <h2>3) Resultado</h2>
+      <p id="statusMessage" class="statusMessage">Aguardando arquivos para processamento.</p>
+      <button id="downloadBtn" class="btn success" type="button" disabled>Baixar arquivo</button>
+    </section>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="utils/excel.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
