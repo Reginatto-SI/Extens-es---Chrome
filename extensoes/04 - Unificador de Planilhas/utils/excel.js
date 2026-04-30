@@ -77,11 +77,20 @@ window.ExcelUtils = {
     };
   },
 
-  async validateFilesHeaders(files, headerRowNumber, onLog) {
+  async validateFilesHeaders(modelFile, files, headerRowNumber, onLog) {
     ensureXlsxLoaded();
     const headerRowIndex = headerRowNumber - 1;
     const invalidFiles = [];
-    let referenceHeader = [];
+
+    const modelData = await this.readFileAsArrayBuffer(modelFile);
+    const modelWorkbook = XLSX.read(modelData, { type: "array", cellDates: false });
+    const modelSheetName = modelWorkbook.SheetNames[0];
+    const modelWorksheet = modelWorkbook.Sheets[modelSheetName];
+    const referenceHeader = this.getHeaderRowFromWorksheet(modelWorksheet, headerRowIndex);
+
+    onLog?.(`Arquivo modelo selecionado: ${modelFile.name}`);
+    onLog?.(`Linha de cabeçalho configurada: ${headerRowNumber}`);
+    onLog?.(`Quantidade de colunas esperadas no modelo: ${referenceHeader.length}`);
 
     for (let i = 0; i < files.length; i += 1) {
       const file = files[i];
@@ -90,14 +99,6 @@ window.ExcelUtils = {
       const firstSheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[firstSheetName];
       const currentHeader = this.getHeaderRowFromWorksheet(worksheet, headerRowIndex);
-
-      if (i === 0) {
-        referenceHeader = currentHeader;
-        onLog?.(`Arquivo referência: ${file.name}`);
-        onLog?.(`Linha de cabeçalho configurada: ${headerRowNumber}`);
-        onLog?.(`Quantidade de colunas do arquivo referência: ${referenceHeader.length}`);
-        continue;
-      }
 
       const comparison = this.compareHeaders(referenceHeader, currentHeader);
       if (comparison.valid) {

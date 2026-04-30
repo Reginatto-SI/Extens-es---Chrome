@@ -26,7 +26,7 @@ Permitir que o usuário carregue múltiplos arquivos Excel `.xlsx` e gere um ún
 - Aceitar apenas arquivos `.xlsx`.
 - Ler apenas a primeira aba de cada arquivo.
 - Manter a ordem dos arquivos conforme carregados.
-- O primeiro arquivo carregado define o padrão de colunas.
+- O arquivo modelo selecionado define o padrão de colunas.
 - Linha de cabeçalho configurável (mínimo 1).
 - Comparar cabeçalhos com `trim()` simples, sem normalização agressiva.
 - Ao encontrar divergência, apenas informar e bloquear a unificação.

@@ -1,8 +1,12 @@
+const modelInput = document.getElementById("modelInput");
+const modelFileName = document.getElementById("modelFileName");
+const selectModelBtn = document.getElementById("selectModelBtn");
 const fileInput = document.getElementById("fileInput");
 const dropZone = document.getElementById("dropZone");
 const fileList = document.getElementById("fileList");
 const selectFilesBtn = document.getElementById("selectFilesBtn");
 const mergeBtn = document.getElementById("mergeBtn");
+const blockOnDivergenceInput = document.getElementById("blockOnDivergenceInput");
 const statusMessage = document.getElementById("statusMessage");
 const versionBadge = document.getElementById("versionBadge");
 const progressWrapper = document.getElementById("progressWrapper");
@@ -19,6 +23,7 @@ const headerRowInput = document.getElementById("headerRowInput");
 const divergencePanel = document.getElementById("divergencePanel");
 const divergenceList = document.getElementById("divergenceList");
 
+let modelFile = null;
 let selectedFiles = [];
 let mergedWorkbook = null;
 let isProcessing = false;
@@ -29,17 +34,27 @@ const defaultMergeLabel = "Unificar arquivos";
 
 versionBadge.textContent = `v${chrome.runtime.getManifest().version}`;
 addLog(`Extensão iniciada - v${chrome.runtime.getManifest().version}`);
-addLog(`Versão carregada: ${chrome.runtime.getManifest().version}`);
 
-chrome.storage.local.set({
-  extensionVersion: chrome.runtime.getManifest().version,
-  extensionUpdatedAt: new Date().toISOString()
-});
-
+selectModelBtn.addEventListener("click", () => modelInput.click());
 selectFilesBtn.addEventListener("click", () => fileInput.click());
+
 clearConsoleBtn.addEventListener("click", () => {
   consoleLog.innerHTML = "";
   addLog("Console limpo pelo usuário.", "warning");
+});
+
+modelInput.addEventListener("change", (event) => {
+  const file = event.target.files?.[0];
+  if (!file || !file.name.toLowerCase().endsWith(".xlsx")) {
+    modelFile = null;
+    modelFileName.textContent = "Nenhum arquivo modelo selecionado.";
+    addLog("Arquivo modelo inválido ignorado.", "warning");
+    return;
+  }
+  modelFile = file;
+  modelFileName.textContent = file.name;
+  addLog(`Arquivo modelo selecionado: ${file.name}`);
+  setStatus("Arquivo modelo selecionado. Agora escolha os arquivos para unificar.", "");
 });
 
 fileInput.addEventListener("change", (event) => {
@@ -56,16 +71,21 @@ dropZone.addEventListener("dragleave", () => dropZone.classList.remove("active")
 dropZone.addEventListener("drop", (event) => {
   event.preventDefault();
   dropZone.classList.remove("active");
-  const files = Array.from(event.dataTransfer.files);
-  setFiles(files);
+  setFiles(Array.from(event.dataTransfer.files));
 });
 
 mergeBtn.addEventListener("click", async () => {
   if (isProcessing) return;
 
+  if (!modelFile) {
+    setStatus("Selecione um arquivo modelo .xlsx antes de unificar.", "error");
+    addLog("Validação bloqueada: arquivo modelo não selecionado.", "error");
+    return;
+  }
+
   if (!selectedFiles.length) {
     setStatus("Selecione ao menos um arquivo .xlsx para unificar.", "error");
-    addLog("Tentativa de processar sem arquivos selecionados.", "warning");
+    addLog("Validação bloqueada: nenhum arquivo para unificação.", "error");
     return;
   }
 
@@ -77,30 +97,32 @@ mergeBtn.addEventListener("click", async () => {
   }
 
   startProcessingState();
-  addLog("Iniciando processamento.");
   hideDivergences();
+  addLog(`Início da validação com arquivo modelo: ${modelFile.name}`);
+  addLog(`Quantidade de arquivos para unificar: ${selectedFiles.length}`);
+  addLog(`Linha de cabeçalho usada: ${headerRowNumber}`);
 
   try {
-    const validationResult = await window.ExcelUtils.validateFilesHeaders(selectedFiles, headerRowNumber, (message, type = "info") => {
+    const validationResult = await window.ExcelUtils.validateFilesHeaders(modelFile, selectedFiles, headerRowNumber, (message, type = "info") => {
       addLog(message, type);
     });
 
     if (!validationResult.valid) {
-      mergedWorkbook = null;
-      processedFilesCount = 0;
-      mergedRowsCount = 0;
-      updateProgress("Validação interrompeu a unificação", 0);
-      setStatus("Arquivos com divergência de colunas. Corrija antes de unificar.", "error");
-      addLog("Unificação bloqueada por divergência de colunas.", "error");
       renderDivergences(validationResult.invalidFiles);
-      return;
-    }
+      if (blockOnDivergenceInput.checked) {
+        mergedWorkbook = null;
+        setStatus("Arquivos com divergência de colunas. Corrija antes de unificar.", "error");
+        addLog("Unificação bloqueada por divergência de colunas.", "error");
+        updateProgress("Unificação bloqueada por divergência", 0);
+        return;
+      }
 
-    addLog("Validação de colunas concluída: todos os arquivos seguem o padrão.", "success");
+      addLog("Divergências detectadas, porém unificação permitida por configuração.", "warning");
+      setStatus("Divergências detectadas. Unificação continuará com alerta.", "");
+    }
 
     const rows = await window.ExcelUtils.readFilesAsRows(selectedFiles, ({ current, total, percent, fileName }) => {
       processedFilesCount = current;
-      addLog(`Processando ${fileName}.`);
       updateProgress(`Processando ${fileName} — ${current} de ${total} arquivos (${percent}%)`, percent);
       addLog(`${fileName} processado com sucesso.`, "success");
     });
@@ -108,7 +130,7 @@ mergeBtn.addEventListener("click", async () => {
     mergedWorkbook = window.ExcelUtils.generateWorkbookFromRows(rows);
     mergedRowsCount = rows.length;
 
-    if (mergedWorkbook && selectedFiles.length > 0 && mergedRowsCount > 0) {
+    if (mergedWorkbook && mergedRowsCount > 0) {
       updateProgress("100% - Concluído", 100);
       setStatus("Arquivo pronto para download.", "success");
       addLog("Conclusão da unificação.", "success");
@@ -116,13 +138,10 @@ mergeBtn.addEventListener("click", async () => {
     } else {
       mergedWorkbook = null;
       setStatus("Não foi possível concluir a unificação: nenhum dado válido foi consolidado.", "error");
-      addLog("Unificação sem dados válidos: modal de sucesso não exibido.", "warning");
+      addLog("Unificação sem dados válidos.", "warning");
     }
   } catch (error) {
     mergedWorkbook = null;
-    if (!processedFilesCount) {
-      updateProgress("Erro antes do processamento dos arquivos", 0);
-    }
     setStatus(`Erro ao processar arquivos: ${error.message || "falha inesperada."}`, "error");
     addLog(`Erro ao processar arquivo: ${error.message || "falha inesperada."}`, "error");
   } finally {
@@ -133,9 +152,7 @@ mergeBtn.addEventListener("click", async () => {
 modalDownloadBtn.addEventListener("click", handleDownload);
 closeModalBtn.addEventListener("click", closeCompletionModal);
 completionModal.addEventListener("click", (event) => {
-  if (event.target === completionModal) {
-    closeCompletionModal();
-  }
+  if (event.target === completionModal) closeCompletionModal();
 });
 
 function handleDownload() {
@@ -156,19 +173,19 @@ function setFiles(files) {
   mergedWorkbook = null;
   processedFilesCount = 0;
   mergedRowsCount = 0;
-  hideDivergences();
-  closeCompletionModal();
   resetProgress();
+  closeCompletionModal();
+  hideDivergences();
   renderFileList();
 
   if (!selectedFiles.length) {
-    setStatus("Nenhum arquivo .xlsx válido selecionado.", "error");
-    addLog("Nenhum arquivo .xlsx válido selecionado.", "warning");
+    setStatus("Nenhum arquivo .xlsx válido selecionado para unificação.", "error");
+    addLog("Nenhum arquivo .xlsx válido para unificação.", "warning");
     return;
   }
 
-  setStatus(`${selectedFiles.length} arquivo(s) carregado(s) para unificação.`, "");
-  addLog(`${selectedFiles.length} arquivo(s) selecionado(s).`);
+  setStatus(`${selectedFiles.length} arquivo(s) selecionado(s) para unificação.`, "");
+  addLog(`${selectedFiles.length} arquivo(s) selecionado(s) para unificar.`);
 }
 
 function renderFileList() {
@@ -186,22 +203,24 @@ function renderDivergences(invalidFiles) {
   invalidFiles.forEach((entry) => {
     const item = document.createElement("li");
     item.className = "divergenceItem";
-    const differencesPreview = entry.result.differences.slice(0, 3).map((difference) => {
+    const preview = entry.result.differences.slice(0, 5).map((difference) => {
       const position = difference.index + 1;
       if (difference.type === "different") {
-        return `Coluna ${position}: esperado \"${difference.expected}\" e encontrado \"${difference.found}\"`;
+        return `Coluna ${position}: esperado "${difference.expected}" e encontrado "${difference.found}"`;
       }
       if (difference.type === "extra") {
-        return `Coluna extra na posição ${position}: \"${difference.found}\"`;
+        return `Coluna extra na posição ${position}: "${difference.found}"`;
       }
-      return `Coluna ausente na posição ${position}: esperado \"${difference.expected}\"`;
+      return `Coluna ausente na posição ${position}: esperado "${difference.expected}"`;
     });
 
+    const additional = entry.result.differences.length - preview.length;
     item.innerHTML = `
       <strong>${entry.fileName}</strong>
-      <div>Tipo: divergência de estrutura de colunas</div>
-      <div>Colunas esperadas: ${entry.result.expectedColumns} • Colunas encontradas: ${entry.result.foundColumns}</div>
-      <ul>${differencesPreview.map((text) => `<li>${text}</li>`).join("")}</ul>
+      <div>Colunas esperadas: ${entry.result.expectedColumns}</div>
+      <div>Colunas encontradas: ${entry.result.foundColumns}</div>
+      <ul>${preview.map((text) => `<li>${text}</li>`).join("")}</ul>
+      ${additional > 0 ? `<div class="extraDiff">+ ${additional} divergências adicionais não exibidas</div>` : ""}
     `;
     divergenceList.appendChild(item);
   });
@@ -235,7 +254,6 @@ function resetProgress() {
 }
 
 function startProcessingState() {
-  // Bloqueio do botão para evitar múltiplos cliques durante processamento.
   isProcessing = true;
   mergeBtn.disabled = true;
   mergeBtn.textContent = "Processando...";
@@ -249,7 +267,6 @@ function finishProcessingState() {
   mergeBtn.textContent = defaultMergeLabel;
 }
 
-// Console interno para diagnóstico simples de processamento.
 function addLog(message, type = "info") {
   const time = new Date().toLocaleTimeString("pt-BR");
   const line = document.createElement("div");
@@ -259,7 +276,6 @@ function addLog(message, type = "info") {
   consoleLog.scrollTop = consoleLog.scrollHeight;
 }
 
-// Modal de conclusão como ponto principal do download após sucesso.
 function openCompletionModal() {
   modalSummary.textContent = `Arquivos processados: ${processedFilesCount} • Linhas consolidadas: ${mergedRowsCount}`;
   completionModal.classList.remove("hidden");
