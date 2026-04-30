@@ -8,16 +8,37 @@
 </head>
 <body>
   <div class="appShell">
-    <header class="card header">
+    <header class="card header fullWidth">
       <div>
         <h1>Unificador de Planilhas</h1>
-        <p>Carregue arquivos .xlsx e gere um único arquivo consolidado por concatenação.</p>
+        <p>Selecione um arquivo modelo e os arquivos .xlsx para consolidar por concatenação.</p>
       </div>
-      <span class="badge" id="versionBadge">v1.0.2</span>
+      <span class="badge" id="versionBadge">v1.2.0</span>
     </header>
 
     <section class="card">
-      <h2>1) Upload</h2>
+      <h2>Arquivo modelo</h2>
+      <p class="cardHelp">Selecione a planilha que representa o padrão correto de colunas.</p>
+      <button id="selectModelBtn" class="btn" type="button">Selecionar arquivo modelo</button>
+      <input id="modelInput" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
+      <p id="modelFileName" class="fileChip">Nenhum arquivo modelo selecionado.</p>
+    </section>
+
+    <section class="card">
+      <h2>Configurações</h2>
+      <label class="fieldLabel" for="headerRowInput">Linha do cabeçalho</label>
+      <input id="headerRowInput" class="numberInput" type="number" min="1" value="8" />
+      <p class="fieldHelp">A linha informada será usada para comparar os cabeçalhos do arquivo modelo e dos arquivos selecionados.</p>
+      <label class="checkboxLabel">
+        <input id="blockOnDivergenceInput" type="checkbox" checked />
+        Bloquear unificação se houver divergência
+      </label>
+      <p class="fieldHelp warningText">Continuar com divergência pode gerar Excel desalinhado.</p>
+    </section>
+
+    <section class="card fullWidth">
+      <h2>Arquivos para unificar</h2>
+      <p class="cardHelp">Selecione ou arraste os arquivos que serão consolidados.</p>
       <div id="dropZone" class="dropZone">
         <p>Arraste arquivos .xlsx para esta área</p>
         <button id="selectFilesBtn" class="btn" type="button">Selecionar arquivos</button>
@@ -27,10 +48,7 @@
     </section>
 
     <section class="card">
-      <h2>2) Ação</h2>
-      <label class="fieldLabel" for="headerRowInput">Linha do cabeçalho</label>
-      <input id="headerRowInput" class="numberInput" type="number" min="1" value="1" />
-      <p class="fieldHelp">Informe a linha onde começam os cabeçalhos das colunas. O primeiro arquivo carregado será usado como modelo.</p>
+      <h2>Ação e progresso</h2>
       <button id="mergeBtn" class="btn primary" type="button">Unificar arquivos</button>
       <div id="progressWrapper" class="progressWrapper hidden">
         <div class="progressInfo">
@@ -44,21 +62,21 @@
     </section>
 
     <section class="card">
-      <h2>3) Resultado</h2>
-      <p id="statusMessage" class="statusMessage">Aguardando arquivos para processamento.</p>
+      <h2>Resultado</h2>
+      <p id="statusMessage" class="statusMessage">Aguardando seleção de arquivo modelo e arquivos para unificar.</p>
     </section>
 
-    <section id="divergencePanel" class="card hidden">
-      <h2>Divergências encontradas</h2>
-      <ul id="divergenceList" class="divergenceList"></ul>
-    </section>
-
-    <section class="card">
+    <section class="card fullWidth">
       <div class="consoleHeader">
         <h2>Console de processamento</h2>
         <button id="clearConsoleBtn" class="btn" type="button">Limpar console</button>
       </div>
       <div id="consoleLog" class="consoleLog"></div>
+    </section>
+
+    <section id="divergencePanel" class="card fullWidth hidden">
+      <h2>Divergências encontradas</h2>
+      <ul id="divergenceList" class="divergenceList"></ul>
     </section>
   </div>
 
@@ -74,7 +92,6 @@
     </div>
   </div>
 
-  <!-- Manifest V3 exige script local (script-src 'self'), por isso a biblioteca XLSX é carregada da pasta vendor. -->
   <script src="vendor/xlsx.full.min.js"></script>
   <script src="utils/excel.js"></script>
   <script src="popup.js"></script>
