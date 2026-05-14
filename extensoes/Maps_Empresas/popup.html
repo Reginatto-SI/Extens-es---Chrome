@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Maps_Empresas</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="hero">
+        <span class="eyebrow">Extensão local</span>
+        <h1>Maps_Empresas</h1>
+        <p>Capture dados visíveis do Google Maps após treinamento manual.</p>
+      </header>
+
+      <section class="status-card" aria-live="polite">
+        <div>
+          <span class="label">Status</span>
+          <strong id="statusText">Aguardando</strong>
+        </div>
+        <div>
+          <span class="label">Empresas</span>
+          <strong id="leadCount">0</strong>
+        </div>
+      </section>
+
+      <p id="message" class="message">Abra o Google Maps antes de iniciar.</p>
+      <p id="targetTabText" class="target-tab">Aba alvo: não definida</p>
+
+      <section class="actions">
+        <button id="startTraining" class="primary">Iniciar treinamento</button>
+        <div class="grid">
+          <button data-field="listContainer">Selecionar lista lateral</button>
+          <button data-field="name">Selecionar nome</button>
+          <button data-field="phone">Selecionar telefone</button>
+          <button data-field="address">Selecionar endereço</button>
+          <button data-field="website">Selecionar site</button>
+        </div>
+        <div class="grid">
+          <button id="startCapture" class="success">Iniciar captura</button>
+          <button id="pauseCapture">Pausar captura</button>
+          <button id="exportCsv">Exportar CSV</button>
+          <button id="clearData" class="danger">Limpar dados</button>
+        </div>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
