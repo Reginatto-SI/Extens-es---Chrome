@@ -11,6 +11,7 @@ const elements = {
   leadCount: document.getElementById('leadCount'),
   message: document.getElementById('message'),
   targetTabText: document.getElementById('targetTabText'),
+  openFloatingPanel: document.getElementById('openFloatingPanel'),
   startTraining: document.getElementById('startTraining'),
   startCapture: document.getElementById('startCapture'),
   pauseCapture: document.getElementById('pauseCapture'),
@@ -31,7 +32,7 @@ const CSV_COLUMNS = [
   ['capturedAt', 'CapturadoEm']
 ];
 
-const TARGETED_START_COMMANDS = new Set(['START_TRAINING', 'START_CAPTURE']);
+const TARGETED_START_COMMANDS = new Set(['START_TRAINING', 'START_CAPTURE', 'TOGGLE_FLOATING_PANEL']);
 
 const FIELD_LABELS = {
   listContainer: 'lista lateral',
@@ -71,6 +72,7 @@ function prepareFieldButtons() {
 }
 
 function bindActions() {
+  elements.openFloatingPanel.addEventListener('click', () => openFloatingPanel());
   elements.startTraining.addEventListener('click', () => sendToMapsTab({ type: 'START_TRAINING' }));
   elements.startCapture.addEventListener('click', () => sendToMapsTab({ type: 'START_CAPTURE' }));
   elements.pauseCapture.addEventListener('click', () => sendToMapsTab({ type: 'PAUSE_CAPTURE' }));
@@ -80,6 +82,11 @@ function bindActions() {
   elements.fieldButtons.forEach((button) => {
     button.addEventListener('click', () => sendToMapsTab({ type: 'SELECT_FIELD', fieldName: button.dataset.field }));
   });
+}
+
+
+async function openFloatingPanel() {
+  await sendToMapsTab({ type: 'TOGGLE_FLOATING_PANEL' });
 }
 
 async function getActiveTab() {

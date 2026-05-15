@@ -9,7 +9,8 @@
     leads: 'mapsEmpresasLeads',
     fieldMap: 'mapsEmpresasFieldMap',
     status: 'mapsEmpresasStatus',
-    lastMessage: 'mapsEmpresasLastMessage'
+    lastMessage: 'mapsEmpresasLastMessage',
+    targetTabId: 'mapsEmpresasTargetTabId'
   };
 
   const state = {
@@ -20,7 +21,25 @@
     fieldMap: {},
     observer: null,
     debounceTimer: null,
-    highlightedElement: null
+    highlightedElement: null,
+    previousBodyCursor: '',
+    status: 'Aguardando',
+    lastMessage: '',
+    floatingPanel: null,
+    floatingPanelMinimized: false,
+    assistedScanEnabled: false,
+    assistedScanMode: 'medium',
+    assistedScanTimer: null,
+    assistedScanOptions: {
+      intervalMs: 1800,
+      maxSteps: 50,
+      currentStep: 0,
+      unchangedSteps: 0,
+      maxUnchangedSteps: 5,
+      lastLeadCount: 0,
+      lastScrollTop: 0,
+      noScrollSteps: 0
+    }
   };
 
   const FIELD_LABELS = {
@@ -29,6 +48,12 @@
     phone: 'telefone',
     address: 'endereço',
     website: 'site'
+  };
+
+  const ASSISTED_SCAN_MODES = {
+    short: { label: 'Curta', maxSteps: 20, intervalMs: 1500, maxUnchangedSteps: 4 },
+    medium: { label: 'Média', maxSteps: 50, intervalMs: 1800, maxUnchangedSteps: 5 },
+    long: { label: 'Longa', maxSteps: 100, intervalMs: 2200, maxUnchangedSteps: 8 }
   };
 
   const PHONE_REGEX = /(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?(?:9\s*)?\d{4,5}[-\s]?\d{4}\b/g;
@@ -52,6 +77,12 @@
           return selectField(message.fieldName);
         case 'START_CAPTURE':
           return startCapture();
+        case 'START_VISIBLE_CAPTURE':
+          return startVisibleCapture();
+        case 'START_ASSISTED_SCAN':
+          return startAssistedScan();
+        case 'TOGGLE_FLOATING_PANEL':
+          return toggleFloatingPanel();
         case 'PAUSE_CAPTURE':
           return pauseCapture();
         case 'CLEAR_DATA':
@@ -77,6 +108,7 @@
     state.trainingMode = true;
     state.selectingField = null;
     state.captureEnabled = false;
+    stopAssistedScanTimer();
     stopObserver();
     return syncSession('Aguardando', 'Treinamento iniciado. Escolha um campo para selecionar.');
   }
@@ -89,27 +121,52 @@
     state.trainingMode = true;
     state.selectingField = fieldName;
     console.log(`[Maps_Empresas] Modo seleção ativo: ${fieldName}`);
+    setTrainingCursor();
     removeHighlight();
     document.addEventListener('mouseover', handleSelectionMouseOver, true);
     document.addEventListener('mouseout', handleSelectionMouseOut, true);
     document.addEventListener('click', handleSelectionClick, true);
-    return syncSession(`Treinando: selecione o campo ${FIELD_LABELS[fieldName]}`, `Clique no elemento de ${FIELD_LABELS[fieldName]} no Google Maps.`);
+    return syncSession(`Treinando: selecione o campo ${FIELD_LABELS[fieldName]}`, 'Clique no elemento correspondente no Google Maps.');
   }
 
   async function startCapture() {
     state.trainingMode = false;
     state.selectingField = null;
     state.captureEnabled = true;
+    state.assistedScanEnabled = false;
+    stopAssistedScanTimer();
     removeSelectionListeners();
     removeHighlight();
+    resetTrainingCursor();
     startObserver();
     await scanPage();
     return syncSession('Capturando', 'Captura iniciada. Role a lista manualmente para encontrar mais empresas.');
   }
 
+  async function startVisibleCapture() {
+    state.trainingMode = false;
+    state.selectingField = null;
+    state.captureEnabled = true;
+    state.assistedScanEnabled = false;
+    stopAssistedScanTimer();
+    stopObserver();
+    removeSelectionListeners();
+    removeHighlight();
+    resetTrainingCursor();
+    await scanPage('Capturando', 'Captura visível concluída.');
+    state.captureEnabled = false;
+    return syncSession('Aguardando', 'Captura visível concluída.');
+  }
+
   function pauseCapture() {
     state.captureEnabled = false;
+    state.assistedScanEnabled = false;
+    stopAssistedScanTimer();
     stopObserver();
+    removeSelectionListeners();
+    removeHighlight();
+    resetTrainingCursor();
+    console.log('[Maps_Empresas] Varredura assistida pausada.');
     return syncSession('Pausado', 'Captura pausada.');
   }
 
@@ -119,17 +176,22 @@
     state.captureEnabled = false;
     state.trainingMode = false;
     state.selectingField = null;
+    state.assistedScanEnabled = false;
+    stopAssistedScanTimer();
     stopObserver();
     removeSelectionListeners();
     removeHighlight();
-    return syncSession('Aguardando', '');
+    resetTrainingCursor();
+    await chrome.storage.session.remove(SESSION_KEYS.targetTabId);
+    return syncSession('Aguardando', 'Dados limpos com sucesso.');
   }
 
-  async function scanPage() {
+  async function scanPage(status = 'Capturando', message = 'Captura atualizada com os dados visíveis.', shouldSync = true) {
     if (!state.captureEnabled) return;
     scanListContainer();
     scanDetailsPanel();
-    await syncSession('Capturando', 'Captura atualizada com os dados visíveis.');
+    console.log('[Maps_Empresas] Leads capturados:', state.leads.length);
+    if (shouldSync) await syncSession(status, message);
   }
 
   function scanListContainer() {
@@ -232,7 +294,10 @@
         [SESSION_KEYS.status]: status || 'Aguardando',
         [SESSION_KEYS.lastMessage]: message || ''
       });
-      console.log('[Maps_Empresas] Sessão sincronizada:', status || 'Aguardando');
+      state.status = status || 'Aguardando';
+      state.lastMessage = message || '';
+      console.log('[Maps_Empresas] Sessão sincronizada:', state.status);
+      if (state.floatingPanel) await renderFloatingPanel();
       return makeResponse(message || 'OK');
     } catch (error) {
       return reportStorageError(error);
@@ -244,10 +309,380 @@
       const data = await chrome.storage.session.get(Object.values(SESSION_KEYS));
       state.leads = Array.isArray(data[SESSION_KEYS.leads]) ? data[SESSION_KEYS.leads] : [];
       state.fieldMap = data[SESSION_KEYS.fieldMap] && typeof data[SESSION_KEYS.fieldMap] === 'object' ? data[SESSION_KEYS.fieldMap] : {};
+      state.status = data[SESSION_KEYS.status] || 'Aguardando';
+      state.lastMessage = data[SESSION_KEYS.lastMessage] || '';
     } catch (error) {
       await reportStorageError(error);
     }
     return state;
+  }
+
+
+  // Controla a UI principal da versão 2.0 dentro do Google Maps, sem tentar reabrir o popup do Chrome.
+  async function toggleFloatingPanel() {
+    if (!isGoogleMapsPage()) {
+      return { ok: false, message: 'O painel só pode ser aberto em páginas do Google Maps.' };
+    }
+
+    state.floatingPanelMinimized = false;
+    ensureFloatingPanel();
+    await renderFloatingPanel();
+    console.log('[Maps_Empresas] Painel flutuante aberto.');
+    return makeResponse('Painel flutuante aberto.');
+  }
+
+  function isGoogleMapsPage() {
+    return ['www.google.com', 'www.google.com.br'].includes(location.hostname) && location.pathname.startsWith('/maps');
+  }
+
+  function ensureFloatingPanel() {
+    if (state.floatingPanel?.isConnected) return state.floatingPanel;
+
+    const panel = document.createElement('section');
+    panel.id = 'maps-empresas-floating-panel';
+    panel.setAttribute('aria-live', 'polite');
+    panel.style.cssText = [
+      'position: fixed',
+      'right: 16px',
+      'bottom: 16px',
+      'width: min(340px, calc(100vw - 32px))',
+      'z-index: 2147483647',
+      'box-sizing: border-box',
+      'font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      'color: #172033',
+      'background: #ffffff',
+      'border: 1px solid #dbe3ef',
+      'border-radius: 18px',
+      'box-shadow: 0 18px 44px rgba(15, 23, 42, 0.22)',
+      'overflow: hidden'
+    ].join(';');
+    document.body.appendChild(panel);
+    state.floatingPanel = panel;
+    return panel;
+  }
+
+  async function renderFloatingPanel() {
+    const panel = ensureFloatingPanel();
+    await loadSession();
+
+    if (state.floatingPanelMinimized) {
+      panel.innerHTML = '';
+      panel.style.width = 'auto';
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.textContent = `Maps_Empresas • ${state.leads.length} leads`;
+      tab.style.cssText = 'border: 0; padding: 12px 14px; border-radius: 999px; color: #fff; background: #2563eb; font-weight: 800; cursor: pointer; box-shadow: none;';
+      tab.addEventListener('click', () => {
+        state.floatingPanelMinimized = false;
+        renderFloatingPanel();
+      });
+      panel.appendChild(tab);
+      return;
+    }
+
+    panel.style.width = 'min(340px, calc(100vw - 32px))';
+    panel.innerHTML = `
+      <div style="padding: 14px 14px 12px; background: linear-gradient(135deg, #1d4ed8, #0891b2); color: #fff;">
+        <strong style="display:block; font-size: 16px;">Maps_Empresas 2.0</strong>
+        <span style="display:block; margin-top: 4px; font-size: 12px; opacity: .9;">Painel flutuante do Google Maps</span>
+      </div>
+      <div style="display:grid; grid-template-columns: 1fr auto; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #e2e8f0;">
+        <div><span style="display:block; color:#64748b; font-size: 11px; font-weight: 800; text-transform: uppercase;">Status</span><strong>${escapeHtml(state.status || 'Aguardando')}</strong></div>
+        <div><span style="display:block; color:#64748b; font-size: 11px; font-weight: 800; text-transform: uppercase;">Empresas</span><strong>${state.leads.length}</strong></div>
+      </div>
+      <div style="padding: 12px 14px;">
+        <p style="min-height: 36px; margin: 0 0 10px; padding: 9px 10px; border: 1px solid #bfdbfe; border-radius: 12px; color:#1e3a8a; background:#eff6ff; font-size: 12px; line-height: 1.35;">${escapeHtml(state.lastMessage || 'Abra ou mantenha o Maps nesta aba e escolha uma ação.')}</p>
+        <div data-role="lead-preview" style="margin-bottom: 10px; padding: 9px 10px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc;">${renderLeadPreview()}</div>
+        <div style="margin-bottom: 10px;">
+          <strong style="display:block; margin-bottom: 6px; color:#475569; font-size: 11px; text-transform: uppercase;">Modo de varredura</strong>
+          <div data-role="scan-mode-grid" style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 6px;"></div>
+        </div>
+        <div data-role="field-grid" style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px;"></div>
+        <div data-role="action-grid" style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px;"></div>
+      </div>
+    `;
+
+    const scanModeGrid = panel.querySelector('[data-role="scan-mode-grid"]');
+    Object.entries(ASSISTED_SCAN_MODES).forEach(([mode, config]) => {
+      scanModeGrid.appendChild(createScanModeButton(mode, config.label));
+    });
+
+    const fieldGrid = panel.querySelector('[data-role="field-grid"]');
+    [
+      ['listContainer', 'Selecionar lista lateral'],
+      ['name', 'Selecionar nome'],
+      ['phone', 'Selecionar telefone'],
+      ['address', 'Selecionar endereço'],
+      ['website', 'Selecionar site']
+    ].forEach(([field, label]) => {
+      fieldGrid.appendChild(createPanelButton(state.fieldMap[field] ? `✓ ${label}` : label, () => selectField(field), Boolean(state.fieldMap[field])));
+    });
+
+    const actionGrid = panel.querySelector('[data-role="action-grid"]');
+    actionGrid.appendChild(createPanelButton('Iniciar captura visível', startVisibleCapture, false, '#15803d'));
+    actionGrid.appendChild(createPanelButton('Iniciar varredura assistida', startAssistedScan, false, '#2563eb'));
+    actionGrid.appendChild(createPanelButton('Pausar', pauseCapture));
+    actionGrid.appendChild(createPanelButton('Limpar', clearData, false, '#dc2626'));
+    actionGrid.appendChild(createPanelButton('Minimizar', () => {
+      state.floatingPanelMinimized = true;
+      renderFloatingPanel();
+    }));
+  }
+
+  function createScanModeButton(mode, label) {
+    const button = document.createElement('button');
+    const selected = state.assistedScanMode === mode;
+    button.type = 'button';
+    button.textContent = selected ? `✓ ${label}` : label;
+    button.style.cssText = [
+      'min-height: 32px',
+      'padding: 6px 8px',
+      `border: 1px solid ${selected ? '#2563eb' : '#dbe3ef'}`,
+      'border-radius: 10px',
+      `color: ${selected ? '#1e3a8a' : '#172033'}`,
+      `background: ${selected ? '#dbeafe' : '#ffffff'}`,
+      'font-size: 12px',
+      'font-weight: 800',
+      'cursor: pointer'
+    ].join(';');
+    button.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      try {
+        await setAssistedScanMode(mode);
+      } catch (error) {
+        console.error('[Maps_Empresas] Erro ao executar ação do painel:', error);
+        await syncSession('Erro', 'Erro ao executar ação no painel. Veja o console para detalhes.');
+      }
+    });
+    return button;
+  }
+
+  function createPanelButton(label, handler, selected = false, background = '#ffffff') {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    const isFilled = background !== '#ffffff';
+    button.style.cssText = [
+      'min-height: 38px',
+      'padding: 8px 10px',
+      `border: 1px solid ${selected ? '#16a34a' : '#dbe3ef'}`,
+      'border-radius: 12px',
+      `color: ${isFilled ? '#ffffff' : selected ? '#166534' : '#172033'}`,
+      `background: ${selected ? '#ecfdf5' : background}`,
+      'font-size: 12px',
+      'font-weight: 800',
+      'cursor: pointer'
+    ].join(';');
+    button.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      try {
+        await handler();
+      } catch (error) {
+        console.error('[Maps_Empresas] Erro ao executar ação do painel:', error);
+        await syncSession('Erro', 'Erro ao executar ação no painel. Veja o console para detalhes.');
+      }
+    });
+    return button;
+  }
+
+  function getAssistedScanModeConfig() {
+    return ASSISTED_SCAN_MODES[state.assistedScanMode] || ASSISTED_SCAN_MODES.medium;
+  }
+
+  async function setAssistedScanMode(mode) {
+    if (!ASSISTED_SCAN_MODES[mode]) return;
+
+    state.assistedScanMode = mode;
+    const config = getAssistedScanModeConfig();
+    state.assistedScanOptions = {
+      ...state.assistedScanOptions,
+      maxSteps: config.maxSteps,
+      intervalMs: Math.max(1000, config.intervalMs),
+      maxUnchangedSteps: config.maxUnchangedSteps
+    };
+    await syncSession(state.status || 'Aguardando', `Modo de varredura definido: ${config.label}.`);
+  }
+
+  // Executa varredura assistida com rolagem moderada apenas no container lateral selecionado/encontrado.
+  async function startAssistedScan() {
+    const container = getAssistedListContainer();
+    if (!container) {
+      return syncSession('Aguardando', 'Selecione a lista lateral ou aguarde os resultados do Maps antes de iniciar a varredura assistida.');
+    }
+
+    const modeConfig = getAssistedScanModeConfig();
+    state.trainingMode = false;
+    state.selectingField = null;
+    state.captureEnabled = true;
+    state.assistedScanEnabled = true;
+    state.assistedScanOptions = {
+      ...state.assistedScanOptions,
+      maxSteps: modeConfig.maxSteps,
+      intervalMs: Math.max(1000, modeConfig.intervalMs),
+      maxUnchangedSteps: modeConfig.maxUnchangedSteps,
+      currentStep: 0,
+      unchangedSteps: 0,
+      lastLeadCount: state.leads.length,
+      lastScrollTop: container.scrollTop,
+      noScrollSteps: 0
+    };
+    stopObserver();
+    removeSelectionListeners();
+    removeHighlight();
+    resetTrainingCursor();
+    console.log('[Maps_Empresas] Varredura assistida iniciada.');
+    await syncSession('Varredura assistida', 'Varredura assistida iniciada. A lista lateral será rolada de forma controlada.');
+    runAssistedScanStep();
+    return makeResponse('Varredura assistida iniciada.');
+  }
+
+  async function runAssistedScanStep() {
+    if (!state.assistedScanEnabled || !state.captureEnabled) return;
+
+    const options = state.assistedScanOptions;
+    const container = getAssistedListContainer();
+    if (!container) {
+      await stopAssistedScan('Lista lateral não encontrada. Varredura assistida pausada.');
+      return;
+    }
+
+    if (options.currentStep >= options.maxSteps || options.unchangedSteps >= options.maxUnchangedSteps) {
+      await stopAssistedScan('Varredura assistida finalizada pelos limites de segurança.', true);
+      return;
+    }
+
+    console.log('[Maps_Empresas] Container de varredura:', container);
+    const scrollBefore = container.scrollTop;
+    const leadCountBefore = state.leads.length;
+    await scanPage('Varredura assistida', 'Varredura assistida capturou os dados visíveis e rolou a lista lateral.', false);
+
+    const scrollAmount = Math.max(220, Math.floor(container.clientHeight * 0.8));
+    container.scrollTop = scrollBefore + scrollAmount;
+    await wait(350);
+    const scrollAfter = container.scrollTop;
+    const hasNewLeads = state.leads.length > options.lastLeadCount;
+    const hasScrolled = scrollAfter > scrollBefore;
+
+    options.currentStep += 1;
+    options.noScrollSteps = hasScrolled ? 0 : (options.noScrollSteps || 0) + 1;
+    options.unchangedSteps = hasNewLeads || hasScrolled ? 0 : options.unchangedSteps + 1;
+    options.lastLeadCount = state.leads.length;
+    options.lastScrollTop = scrollAfter;
+
+    console.log('[Maps_Empresas] Scroll realizado:', scrollAfter);
+    console.log('[Maps_Empresas] Scroll antes/depois:', scrollBefore, scrollAfter);
+    console.log('[Maps_Empresas] Leads antes/depois:', leadCountBefore, state.leads.length);
+    await syncSession('Varredura assistida', `Varredura em andamento: etapa ${options.currentStep}/${options.maxSteps}, leads: ${state.leads.length}.`);
+
+    if (options.currentStep >= 2 && options.noScrollSteps >= 2) {
+      await stopAssistedScan('Fim provável da lista lateral detectado.', true);
+      return;
+    }
+
+    state.assistedScanTimer = setTimeout(runAssistedScanStep, options.intervalMs);
+  }
+
+  async function stopAssistedScan(message, showSummary = false) {
+    state.captureEnabled = false;
+    state.assistedScanEnabled = false;
+    stopAssistedScanTimer();
+    stopObserver();
+    console.log('[Maps_Empresas] Varredura assistida pausada.');
+    await syncSession('Pausado', showSummary ? `Varredura pausada. Total capturado: ${state.leads.length} empresas.` : message);
+  }
+
+  function stopAssistedScanTimer() {
+    if (state.assistedScanTimer) clearTimeout(state.assistedScanTimer);
+    state.assistedScanTimer = null;
+  }
+
+  function getAssistedListContainer() {
+    const trainedData = state.fieldMap.listContainer || {};
+    const trained = getElementFromTraining('listContainer', document);
+    if (isScrollableContainer(trained)) return trained;
+
+    const trainedScrollableParent = findScrollableParent(trained);
+    if (trainedScrollableParent) return trainedScrollableParent;
+
+    const trainedScrollable = safeQuery(document, trainedData.scrollableSelector);
+    if (isScrollableContainer(trainedScrollable)) return trainedScrollable;
+
+    const trainedContainer = safeQuery(document, trainedData.containerSelector);
+    if (isScrollableContainer(trainedContainer)) return trainedContainer;
+
+    const containerScrollableParent = findScrollableParent(trainedContainer);
+    if (containerScrollableParent) return containerScrollableParent;
+
+    return getListContainers().find(isScrollableContainer) || null;
+  }
+
+  function findScrollableParent(element) {
+    let current = element;
+
+    while (current && current !== document.body) {
+      const style = window.getComputedStyle(current);
+      const canScroll = current.scrollHeight > current.clientHeight + 20;
+      const overflowY = style.overflowY;
+
+      if (canScroll && ['auto', 'scroll', 'overlay'].includes(overflowY)) {
+        return current;
+      }
+
+      if (canScroll && current.getAttribute('role') === 'feed') {
+        return current;
+      }
+
+      current = current.parentElement;
+    }
+
+    return null;
+  }
+
+  function isScrollableContainer(element) {
+    if (!element) return false;
+
+    const style = window.getComputedStyle(element);
+    const canScroll = element.scrollHeight > element.clientHeight + 20;
+    const hasScrollableOverflow = ['auto', 'scroll', 'overlay'].includes(style.overflowY);
+    return Boolean(canScroll && (hasScrollableOverflow || element.getAttribute('role') === 'feed'));
+  }
+
+  function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function setTrainingCursor() {
+    if (!state.previousBodyCursor) state.previousBodyCursor = document.body.style.cursor || '';
+    document.body.style.cursor = 'crosshair';
+  }
+
+  function resetTrainingCursor() {
+    if (state.previousBodyCursor !== undefined) document.body.style.cursor = state.previousBodyCursor || '';
+    state.previousBodyCursor = '';
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
+  }
+
+  function renderLeadPreview() {
+    const recentLeads = state.leads.slice(-5).reverse();
+    const items = recentLeads.length
+      ? recentLeads.map((lead) => `<li style="margin: 3px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(getLeadPreviewLabel(lead))}</li>`).join('')
+      : '<li style="margin: 3px 0; color:#64748b;">Nenhum lead capturado ainda.</li>';
+
+    return `
+      <strong style="display:block; margin-bottom: 5px; color:#475569; font-size: 11px; text-transform: uppercase;">Últimos capturados</strong>
+      <ul style="margin:0; padding-left: 16px; font-size: 12px; line-height: 1.35;">${items}</ul>
+    `;
+  }
+
+  function getLeadPreviewLabel(lead) {
+    return normalizeText(lead?.name || lead?.phone || 'Lead sem nome');
   }
 
   // Centraliza o tratamento de falhas do storage temporário e avisa a UI quando ela está aberta.
@@ -326,7 +761,7 @@
   }
 
   function highlightElement(element) {
-    if (!element || element === state.highlightedElement) return;
+    if (!element || element === state.highlightedElement || element.closest?.('#maps-empresas-floating-panel')) return;
     removeHighlight();
     state.highlightedElement = element;
     element.dataset.mapsEmpresasPreviousOutline = element.style.outline || '';
@@ -357,7 +792,7 @@
   }
 
   async function handleSelectionClick(event) {
-    if (!state.selectingField) return;
+    if (!state.selectingField || event.target.closest?.('#maps-empresas-floating-panel')) return;
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
@@ -365,6 +800,9 @@
     const element = event.target;
     const container = findNearestContainer(element);
     const selectedField = state.selectingField;
+    const scrollableParent = selectedField === 'listContainer'
+      ? findScrollableParent(element)
+      : null;
     state.fieldMap[selectedField] = {
       exampleText: normalizeText(element.innerText || element.textContent || '').slice(0, 220),
       tagName: element.tagName,
@@ -372,6 +810,9 @@
       relativePath: getRelativePath(element, container),
       approximateIndex: getApproximateIndex(element, container),
       containerSelector: container ? buildSmartSelector(container) : '',
+      scrollableSelector: scrollableParent ? buildSmartSelector(scrollableParent) : '',
+      scrollableTagName: scrollableParent ? scrollableParent.tagName : '',
+      scrollableExampleText: scrollableParent ? normalizeText(scrollableParent.innerText || '').slice(0, 220) : '',
       savedAt: new Date().toISOString()
     };
 
@@ -410,6 +851,7 @@
     document.removeEventListener('mouseover', handleSelectionMouseOver, true);
     document.removeEventListener('mouseout', handleSelectionMouseOut, true);
     document.removeEventListener('click', handleSelectionClick, true);
+    resetTrainingCursor();
   }
 
   function getListContainers() {
