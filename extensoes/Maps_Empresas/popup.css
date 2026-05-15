@@ -119,3 +119,8 @@ button.danger { color: #fff; background: var(--danger); border-color: #b91c1c; }
   background: #ecfdf5;
   color: #166534;
 }
+
+.secondary-action {
+  background: #eef2ff;
+  color: #1e3a8a;
+}
