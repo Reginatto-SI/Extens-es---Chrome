@@ -1,4 +1,10 @@
 (() => {
+  if (window.__MAPS_EMPRESAS_CONTENT_LOADED__) {
+    console.log('[Maps_Empresas] Content script já carregado.');
+    return;
+  }
+
+  window.__MAPS_EMPRESAS_CONTENT_LOADED__ = true;
   const SESSION_KEYS = {
     leads: 'mapsEmpresasLeads',
     fieldMap: 'mapsEmpresasFieldMap',
@@ -32,10 +38,13 @@
   const ADDRESS_HINT_REGEX = /(rua|avenida|av\.?|rodovia|travessa|praça|praca|alameda|estrada|bairro|cep|nº|numero|número)/i;
 
   // Restaura apenas o estado de sessão; não há banco, backend ou storage permanente.
-  loadSession();
+  const sessionReady = initializeContent();
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    console.log('[Maps_Empresas] Comando recebido:', message?.type);
     (async () => {
+      await sessionReady;
+
       switch (message?.type) {
         case 'START_TRAINING':
           return startTraining();
@@ -59,6 +68,11 @@
     return true;
   });
 
+  async function initializeContent() {
+    await loadSession();
+    console.log('[Maps_Empresas] Content script carregado.');
+  }
+
   function startTraining() {
     state.trainingMode = true;
     state.selectingField = null;
@@ -74,6 +88,7 @@
 
     state.trainingMode = true;
     state.selectingField = fieldName;
+    console.log(`[Maps_Empresas] Modo seleção ativo: ${fieldName}`);
     removeHighlight();
     document.addEventListener('mouseover', handleSelectionMouseOver, true);
     document.addEventListener('mouseout', handleSelectionMouseOut, true);
@@ -98,7 +113,7 @@
     return syncSession('Pausado', 'Captura pausada.');
   }
 
-  function clearData() {
+  async function clearData() {
     state.leads = [];
     state.fieldMap = {};
     state.captureEnabled = false;
@@ -107,12 +122,7 @@
     stopObserver();
     removeSelectionListeners();
     removeHighlight();
-    return chrome.storage.session.set({
-      [SESSION_KEYS.leads]: [],
-      [SESSION_KEYS.fieldMap]: {},
-      [SESSION_KEYS.status]: 'Aguardando',
-      [SESSION_KEYS.lastMessage]: 'Dados limpos com sucesso.'
-    }).then(() => makeResponse('Dados limpos com sucesso.'));
+    return syncSession('Aguardando', '');
   }
 
   async function scanPage() {
@@ -214,20 +224,53 @@
     return true;
   }
 
-  function syncSession(status, message) {
-    return chrome.storage.session.set({
-      [SESSION_KEYS.leads]: state.leads,
-      [SESSION_KEYS.fieldMap]: state.fieldMap,
-      [SESSION_KEYS.status]: status || 'Aguardando',
-      [SESSION_KEYS.lastMessage]: message || ''
-    }).then(() => makeResponse(message || 'OK'));
+  async function syncSession(status, message) {
+    try {
+      await chrome.storage.session.set({
+        [SESSION_KEYS.leads]: state.leads,
+        [SESSION_KEYS.fieldMap]: state.fieldMap,
+        [SESSION_KEYS.status]: status || 'Aguardando',
+        [SESSION_KEYS.lastMessage]: message || ''
+      });
+      console.log('[Maps_Empresas] Sessão sincronizada:', status || 'Aguardando');
+      return makeResponse(message || 'OK');
+    } catch (error) {
+      return reportStorageError(error);
+    }
   }
 
   async function loadSession() {
-    const data = await chrome.storage.session.get(Object.values(SESSION_KEYS));
-    state.leads = Array.isArray(data[SESSION_KEYS.leads]) ? data[SESSION_KEYS.leads] : [];
-    state.fieldMap = data[SESSION_KEYS.fieldMap] && typeof data[SESSION_KEYS.fieldMap] === 'object' ? data[SESSION_KEYS.fieldMap] : {};
+    try {
+      const data = await chrome.storage.session.get(Object.values(SESSION_KEYS));
+      state.leads = Array.isArray(data[SESSION_KEYS.leads]) ? data[SESSION_KEYS.leads] : [];
+      state.fieldMap = data[SESSION_KEYS.fieldMap] && typeof data[SESSION_KEYS.fieldMap] === 'object' ? data[SESSION_KEYS.fieldMap] : {};
+    } catch (error) {
+      await reportStorageError(error);
+    }
     return state;
+  }
+
+  // Centraliza o tratamento de falhas do storage temporário e avisa a UI quando ela está aberta.
+  async function reportStorageError(error) {
+    console.error('[Maps_Empresas] Erro de storage:', error);
+    const message = 'Não foi possível acessar os dados temporários da extensão. Atualize a extensão e recarregue o Google Maps.';
+
+    try {
+      await chrome.storage.session.set({
+        [SESSION_KEYS.leads]: state.leads,
+        [SESSION_KEYS.fieldMap]: state.fieldMap,
+        [SESSION_KEYS.status]: 'Aguardando',
+        [SESSION_KEYS.lastMessage]: message
+      });
+    } catch (storageError) {
+      console.error('[Maps_Empresas] Erro de storage:', storageError);
+    }
+
+    chrome.runtime.sendMessage({
+      type: 'STORAGE_ERROR',
+      message
+    }).catch(() => {});
+    return { ok: false, message };
   }
 
   // Gera seletores curtos priorizando atributos semânticos e evitando caminhos gigantes html > body.
@@ -313,7 +356,7 @@
     removeHighlight();
   }
 
-  function handleSelectionClick(event) {
+  async function handleSelectionClick(event) {
     if (!state.selectingField) return;
     event.preventDefault();
     event.stopPropagation();
@@ -321,8 +364,8 @@
 
     const element = event.target;
     const container = findNearestContainer(element);
-    const fieldName = state.selectingField;
-    state.fieldMap[fieldName] = {
+    const selectedField = state.selectingField;
+    state.fieldMap[selectedField] = {
       exampleText: normalizeText(element.innerText || element.textContent || '').slice(0, 220),
       tagName: element.tagName,
       selector: buildSmartSelector(element),
@@ -332,10 +375,19 @@
       savedAt: new Date().toISOString()
     };
 
+    const successMessage = `Campo selecionado com sucesso: ${FIELD_LABELS[selectedField]}`;
+    const response = await syncSession('Aguardando', successMessage);
+    if (!response.ok) return;
+
+    console.log('[Maps_Empresas] Campo selecionado:', selectedField);
+    chrome.runtime.sendMessage({
+      type: 'FIELD_SELECTED',
+      field: selectedField,
+      message: successMessage
+    }).catch(() => {});
     state.selectingField = null;
     removeSelectionListeners();
     removeHighlight();
-    syncSession('Aguardando', 'Campo selecionado com sucesso.');
   }
 
   // Observa mudanças visíveis do Maps com debounce para evitar captura agressiva.

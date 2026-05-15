@@ -1,5 +1,6 @@
 const SESSION_KEYS = {
   leads: 'mapsEmpresasLeads',
+  fieldMap: 'mapsEmpresasFieldMap',
   status: 'mapsEmpresasStatus',
   lastMessage: 'mapsEmpresasLastMessage',
   targetTabId: 'mapsEmpresasTargetTabId'
@@ -32,12 +33,41 @@ const CSV_COLUMNS = [
 
 const TARGETED_START_COMMANDS = new Set(['START_TRAINING', 'START_CAPTURE']);
 
+const FIELD_LABELS = {
+  listContainer: 'lista lateral',
+  name: 'nome',
+  phone: 'telefone',
+  address: 'endereço',
+  website: 'site'
+};
+
 document.addEventListener('DOMContentLoaded', initializePopup);
 
+// Recebe confirmações e erros enviados pelo content script enquanto o popup está aberto.
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === 'FIELD_SELECTED') {
+    setMessage(message.message || 'Campo selecionado com sucesso.');
+    refreshFromSession();
+    updateTargetTabStatus();
+  }
+
+  if (message?.type === 'STORAGE_ERROR') {
+    setMessage(message.message || 'Erro ao acessar os dados temporários da extensão.');
+  }
+});
+
 async function initializePopup() {
+  prepareFieldButtons();
   await refreshFromSession();
   bindActions();
   await updateTargetTabStatus();
+}
+
+function prepareFieldButtons() {
+  elements.fieldButtons.forEach((button) => {
+    button.classList.add('field-button');
+    button.dataset.defaultText = button.textContent;
+  });
 }
 
 function bindActions() {
@@ -127,7 +157,7 @@ async function sendToMapsTab(message) {
   }
 
   try {
-    const response = await chrome.tabs.sendMessage(target.tab.id, message);
+    const response = await sendMessageToTab(target.tab, message);
     if (!response?.ok) {
       setMessage(response?.message || 'Não foi possível executar a ação.');
       return;
@@ -135,17 +165,57 @@ async function sendToMapsTab(message) {
     setMessage(response.message || 'Ação concluída.');
     await refreshFromSession();
     await updateTargetTabStatus();
-  } catch (_error) {
+  } catch (error) {
+    console.error('[Maps_Empresas] Falha ao enviar comando:', error);
     setMessage('Recarregue a aba do Google Maps e tente novamente.');
   }
+}
+
+async function sendMessageToTab(tab, message, retryMissingContentScript = true) {
+  console.log('[Maps_Empresas] Enviando comando:', message.type, 'para aba', tab.id);
+
+  try {
+    return await chrome.tabs.sendMessage(tab.id, message);
+  } catch (error) {
+    if (retryMissingContentScript && isMissingContentScriptError(error)) {
+      await injectContentScript(tab.id);
+      console.log('[Maps_Empresas] Content script injetado; reenviando comando:', message.type);
+      return sendMessageToTab(tab, message, false);
+    }
+
+    throw error;
+  }
+}
+
+function isMissingContentScriptError(error) {
+  return String(error?.message || '').includes('Receiving end does not exist');
+}
+
+async function injectContentScript(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['content.js']
+  });
 }
 
 async function refreshFromSession() {
   const data = await chrome.storage.session.get(Object.values(SESSION_KEYS));
   const leads = Array.isArray(data[SESSION_KEYS.leads]) ? data[SESSION_KEYS.leads] : [];
+  const fieldMap = data[SESSION_KEYS.fieldMap] && typeof data[SESSION_KEYS.fieldMap] === 'object' ? data[SESSION_KEYS.fieldMap] : {};
   elements.leadCount.textContent = String(leads.length);
   elements.statusText.textContent = data[SESSION_KEYS.status] || 'Aguardando';
   setMessage(data[SESSION_KEYS.lastMessage] || 'Abra o Google Maps antes de iniciar.');
+  updateFieldButtons(fieldMap);
+}
+
+function updateFieldButtons(fieldMap) {
+  elements.fieldButtons.forEach((button) => {
+    const fieldName = button.dataset.field;
+    const isSelected = Boolean(fieldMap[fieldName]);
+    button.classList.toggle('is-selected', isSelected);
+    const defaultText = button.dataset.defaultText || button.textContent;
+    button.textContent = isSelected ? `Selecionado: ${FIELD_LABELS[fieldName] || fieldName}` : defaultText;
+  });
 }
 
 async function updateTargetTabStatus() {
@@ -184,7 +254,7 @@ async function clearData() {
 
   if (target.ok) {
     try {
-      await chrome.tabs.sendMessage(target.tab.id, { type: 'CLEAR_DATA' });
+      await sendMessageToTab(target.tab, { type: 'CLEAR_DATA' });
     } catch (_error) {
       setMessage('Não foi possível avisar a aba do Maps, mas a sessão da extensão foi limpa.');
     }
@@ -193,9 +263,9 @@ async function clearData() {
   await chrome.storage.session.remove(SESSION_KEYS.targetTabId);
   await chrome.storage.session.set({
     [SESSION_KEYS.leads]: [],
-    mapsEmpresasFieldMap: {},
+    [SESSION_KEYS.fieldMap]: {},
     [SESSION_KEYS.status]: 'Aguardando',
-    [SESSION_KEYS.lastMessage]: target.ok ? 'Dados limpos com sucesso.' : target.message
+    [SESSION_KEYS.lastMessage]: 'Dados limpos com sucesso.'
   });
   await refreshFromSession();
   await updateTargetTabStatus();
