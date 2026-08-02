@@ -206,11 +206,19 @@ const IQLAB = (() => {
     return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
   }
 
-  function normalizeCandle(raw, context = {}) {
-    if (!raw || typeof raw !== 'object') return null;
+  function normalizeCandleDetailed(raw, context = {}) {
+    if (!raw || typeof raw !== 'object') return { candle: null, reason: 'invalid-ohlc' };
+    // Histórico nunca recebe defaults de ativo/timeframe: sua identidade deve vir da correlação.
+    const historical = context.origin === 'history';
+    const activeId = raw.active_id ?? raw.activeId ?? raw.active ?? context.activeId;
+    if (activeId == null || activeId === '' || activeId === 'unknown') {
+      return { candle: null, reason: historical ? 'uncorrelated-history' : 'missing-active-id' };
+    }
     const from = normalizeEpoch(raw.from ?? raw.start ?? raw.open_time ?? raw.timestamp ?? raw.at);
     let to = normalizeEpoch(raw.to ?? raw.end ?? raw.close_time);
-    let timeframeSec = Number(raw.timeframe ?? raw.period ?? raw.interval ?? raw.size ?? context.timeframeSec);
+    // Em lotes históricos, o adaptador do comando é autoritativo e evita confundir count com período.
+    let timeframeSec = Number(historical ? context.timeframeSec
+      : (raw.timeframe ?? raw.period ?? raw.interval ?? raw.size ?? context.timeframeSec));
     const measuredDuration = from && to && to > from ? to - from : null;
 
     // Alguns payloads da IQ Option usam "size" para outros significados.
@@ -219,22 +227,26 @@ const IQLAB = (() => {
     if (measuredDuration && knownTimeframes.includes(measuredDuration)) {
       timeframeSec = measuredDuration;
     } else if (!Number.isFinite(timeframeSec) || !knownTimeframes.includes(timeframeSec)) {
-      timeframeSec = measuredDuration && measuredDuration >= 30 ? measuredDuration : 60;
+      timeframeSec = measuredDuration && knownTimeframes.includes(measuredDuration) ? measuredDuration : NaN;
     }
+
+    if (!knownTimeframes.includes(timeframeSec)) return { candle: null, reason: 'missing-timeframe' };
 
     if (!to && from) to = from + timeframeSec;
     const open = Number(raw.open ?? raw.opening ?? raw.o);
     const close = Number(raw.close ?? raw.closing ?? raw.c);
     const high = Number(raw.max ?? raw.high ?? raw.h ?? Math.max(open, close));
     const low = Number(raw.min ?? raw.low ?? raw.l ?? Math.min(open, close));
-    if (![from, to, open, close, high, low].every(Number.isFinite)) return null;
-    if (!(from < to && low <= open && low <= close && high >= open && high >= close)) return null;
-    const activeId = raw.active_id ?? raw.activeId ?? raw.active ?? context.activeId ?? 'unknown';
+    if (![from, to].every(Number.isFinite)) return { candle: null, reason: 'invalid-time' };
+    if (![open, close, high, low].every(Number.isFinite) ||
+      !(from < to && low <= open && low <= close && high >= open && high >= close)) {
+      return { candle: null, reason: 'invalid-ohlc' };
+    }
     const symbol = String(raw.symbol ?? raw.instrument ?? raw.asset ?? context.symbol ?? `ACTIVE-${activeId}`);
     const marketType = /otc/i.test(symbol) ? 'otc' : (context.marketType || 'unknown');
     const now = Math.floor(Date.now() / 1000);
     const closed = raw.closed === true || raw.is_closed === true || to <= now - 1;
-    return {
+    return { candle: {
       id: `${activeId}|${timeframeSec}|${from}`,
       activeId, symbol, marketType, timeframeSec, from, to,
       open, close, high, low,
@@ -245,18 +257,65 @@ const IQLAB = (() => {
       capturedAt: Date.now(),
       updatedAt: Date.now(),
       schemaVersion: 1
-    };
+    }, reason: null };
+  }
+
+  function normalizeCandle(raw, context = {}) {
+    return normalizeCandleDetailed(raw, context).candle;
+  }
+
+  function prepareCandleBatch(items) {
+    const rejectedByReason = {};
+    const unique = new Map();
+    for (const item of items || []) {
+      const result = normalizeCandleDetailed(item.raw, item.context);
+      if (!result.candle) rejectedByReason[result.reason] = (rejectedByReason[result.reason] || 0) + 1;
+      else if (unique.has(result.candle.id)) rejectedByReason.duplicate = (rejectedByReason.duplicate || 0) + 1;
+      else unique.set(result.candle.id, result.candle);
+    }
+    return { candles: [...unique.values()], rejectedByReason,
+      rejected: (items || []).length - unique.size, uniqueInBatch: unique.size };
+  }
+
+  function samePersistedCandle(left, right) {
+    // Metadados de captura não transformam uma vela idêntica em atualização real.
+    const fields = ['activeId','symbol','marketType','timeframeSec','from','to','open','close',
+      'high','low','volume','closed','color','schemaVersion'];
+    return fields.every(field => left?.[field] === right?.[field]);
+  }
+
+  function classifyCandleWrites(existingCandles, incomingCandles) {
+    const existing = new Map(existingCandles.map(candle => [candle.id, candle]));
+    const toWrite = [];
+    const result = { written: 0, inserted: 0, updated: 0, unchanged: 0 };
+    for (const candle of incomingCandles) {
+      const previous = existing.get(candle.id);
+      if (!previous) result.inserted += 1;
+      else if (!samePersistedCandle(previous, candle)) result.updated += 1;
+      else { result.unchanged += 1; continue; }
+      toWrite.push(candle);
+    }
+    result.written = result.inserted + result.updated;
+    return { ...result, toWrite };
   }
 
   async function putCandles(candles) {
     const valid = candles.filter(Boolean);
-    if (!valid.length) return 0;
+    if (!valid.length) return { written: 0, inserted: 0, updated: 0, unchanged: 0 };
     const db = await openDb();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(STORES.candles, 'readwrite');
       const store = tx.objectStore(STORES.candles);
-      valid.forEach(c => store.put(c));
-      tx.oncomplete = () => resolve(valid.length);
+      const read = store.getAll();
+      let result = { written: 0, inserted: 0, updated: 0, unchanged: 0 };
+      read.onsuccess = () => {
+        const classified = classifyCandleWrites(read.result, valid);
+        result = { written: classified.written, inserted: classified.inserted,
+          updated: classified.updated, unchanged: classified.unchanged };
+        classified.toWrite.forEach(candle => store.put(candle));
+      };
+      read.onerror = () => reject(read.error);
+      tx.oncomplete = () => resolve(result);
       tx.onerror = () => reject(tx.error);
     }).finally(() => db.close());
   }
@@ -553,6 +612,8 @@ const IQLAB = (() => {
       m1Closed: closed.length,
       uniqueMinutes: uniqueStarts.length,
       duplicates,
+      firstTimestamp: uniqueStarts[0] || null,
+      lastTimestamp: uniqueStarts.at(-1) || null,
       longestConsecutiveRun: longestRun,
       gapHistogram: gaps,
       positionCounts,
@@ -640,6 +701,32 @@ const IQLAB = (() => {
     }
   }
 
+  function getStrategyMinimumQuadrants(strategy) {
+    // Todos os tipos abaixo usam exatamente os quadrantes lidos por signalForStrategy.
+    switch (strategy?.type) {
+      case 'two_quadrants_majority': return 2;
+      case 'previous_majority':
+      case 'previous_minority':
+      case 'repeat_q1':
+      case 'invert_q1':
+      case 'repeat_q5':
+      case 'invert_q5':
+      case 'position_repeat':
+      case 'position_inverse':
+      case 'alternation':
+      case 'four_one_minority':
+      case 'four_one_majority':
+        return 1;
+      default:
+        return 1;
+    }
+  }
+
+  function insufficientMetrics() {
+    return { sample: 0, wins: 0, direct: 0, g1: 0, g2: 0, losses: 0,
+      rate: null, results: [], insufficient: true };
+  }
+
   function evaluateEntry(direction, target, galeLevel = 0) {
     if (!target?.complete || !direction || direction === 'neutral') return null;
     const attempts = target.candles.slice(0, Math.min(3, galeLevel + 1));
@@ -668,7 +755,7 @@ const IQLAB = (() => {
     const g1 = results.filter(r => r.result === 'WIN G1').length;
     const g2 = results.filter(r => r.result === 'WIN G2').length;
     const losses = results.filter(r => r.result === 'LOSS').length;
-    const rate = results.length ? Math.round((wins / results.length) * 1000) / 10 : 0;
+    const rate = results.length ? Math.round((wins / results.length) * 1000) / 10 : null;
     return { sample: results.length, wins, direct, g1, g2, losses, rate, results };
   }
 
@@ -1103,6 +1190,7 @@ const IQLAB = (() => {
       ? Math.min(5000, Math.max(20, Number(options.quadrantLimit) || 500))
       : IQLABMultiAsset.clampQuadrantLimit(options.quadrantLimit);
     const completed = completedAll.slice(-quadrantLimit);
+    // O mínimo vem das estratégias ativas; o limite nunca é tratado como requisito.
     // Mantém o quadrante corrente para sinais ao vivo, limitando apenas a base completa do backtest.
     const quadrants = [...completed, ...allQuadrants.filter(q => !q.complete).slice(-1)]
       .sort((a,b) => a.start - b.start);
@@ -1113,14 +1201,17 @@ const IQLAB = (() => {
     const d1 = aggregateCandles(current, 86400);
 
     const marketQuality = analyzeMarketQuality(current);
-    const liveSignals = getLiveSignals(strategies, quadrants, current);
+    const liveSignals = getLiveSignals(strategies.filter(strategy =>
+      completed.length >= getStrategyMinimumQuadrants(strategy)), quadrants, current);
     const signalByStrategy = new Map(liveSignals.map(signal => [signal.strategyId, signal]));
 
     const backtests = strategies.map(strategy => {
-      const metrics = backtestStrategy(strategy, quadrants);
-      const liveSignal = signalByStrategy.get(strategy.id) || null;
+      const minimumQuadrantsRequired = getStrategyMinimumQuadrants(strategy);
+      const analysisAvailable = completed.length >= minimumQuadrantsRequired;
+      const metrics = analysisAvailable ? backtestStrategy(strategy, quadrants) : insufficientMetrics();
+      const liveSignal = analysisAvailable ? (signalByStrategy.get(strategy.id) || null) : null;
       const latestDirection = liveSignal?.direction || null;
-      const recommendation = latestDirection
+      const recommendation = analysisAvailable && latestDirection
         ? contextRecommendation({
             marola: contextFromCandles(current.filter(isM1Candle), 15),
             onda: contextFromCandles(m5, 12),
@@ -1131,11 +1222,28 @@ const IQLAB = (() => {
 
       return {
         strategy,
+        minimumQuadrantsRequired,
+        availableQuadrants: completed.length,
+        analysisAvailable,
+        unavailableReason: analysisAvailable ? null
+          : `Amostra estrutural insuficiente: ${completed.length} disponível(is), ${minimumQuadrantsRequired} necessário(s).`,
         metrics,
         liveSignal,
         recommendation
       };
     }).sort((a,b) => b.metrics.rate - a.metrics.rate || b.metrics.sample - a.metrics.sample);
+
+    const applicable = backtests.filter(item => item.strategy.active && item.strategy.floating);
+    const availableStrategyCount = applicable.filter(item => item.analysisAvailable).length;
+    const unavailableStrategyCount = applicable.length - availableStrategyCount;
+    const requirements = applicable.map(item => item.minimumQuadrantsRequired);
+    const minimumAvailableRequirement = requirements.length ? Math.min(...requirements) : null;
+    const hasIdentity = requestedActiveId != null;
+    const analysisStatus = !hasIdentity ? 'waiting-identity'
+      : !completed.length ? 'waiting-history'
+      : availableStrategyCount === 0 ? 'insufficient'
+      : completed.length >= quadrantLimit ? 'complete' : 'partial';
+    const analysisAvailable = availableStrategyCount > 0;
 
     return {
       latest,
@@ -1147,6 +1255,13 @@ const IQLAB = (() => {
       completeQuadrantsAvailable: completedAll.length,
       quadrantsUsed: completed.length,
       quadrantLimit,
+      minimumQuadrantsRequired: minimumAvailableRequirement,
+      quadrantsMissing: Math.max(0, quadrantLimit - completedAll.length),
+      analysisAvailable,
+      analysisStatus,
+      availableStrategyCount,
+      unavailableStrategyCount,
+      minimumAvailableRequirement,
       latestQuadrant: completed.at(-1) || null,
       aggregated: {
         m5: m5.filter(c => c.complete),
@@ -1179,8 +1294,8 @@ const IQLAB = (() => {
   }
 
   return {
-    openDb, normalizeCandle, putCandles, addDiagnostic, getAllCandles, getDiagnostics,
+    openDb, normalizeCandle, normalizeCandleDetailed, prepareCandleBatch, putCandles, samePersistedCandle, classifyCandleWrites, addDiagnostic, getAllCandles, getDiagnostics,
     getSetting, setSetting, ensureDefaultStrategies, getStrategies, updateStrategy,
-    buildQuadrants, aggregateCandles, buildCaptureDiagnostics, getAssetCoverage, relinkHistoricalCandles, backtestStrategy, signalForStrategy, getCurrentQuadrant, previewSignalForStrategy, getLiveSignals, analyzeMarketQuality, contextRecommendation, analyze
+    buildQuadrants, aggregateCandles, buildCaptureDiagnostics, getAssetCoverage, relinkHistoricalCandles, backtestStrategy, signalForStrategy, getStrategyMinimumQuadrants, getCurrentQuadrant, previewSignalForStrategy, getLiveSignals, analyzeMarketQuality, contextRecommendation, analyze
   };
 })();

@@ -128,7 +128,11 @@
 
   <section id="tab-diagnostics" class="tab-panel">
     <article class="card">
-      <h2>Diagnóstico recente</h2>
+      <div class="section-head">
+        <div><h2>Diagnóstico recente</h2><p class="muted">Fixtures registram apenas estrutura e metadados do histórico.</p></div>
+        <label><input id="protocol-diagnostics" type="checkbox"> Diagnóstico do protocolo</label>
+        <button id="export-protocol" class="secondary">Exportar fixtures</button>
+      </div>
       <div id="diagnostics" class="table-wrap"></div>
     </article>
     <article class="card">

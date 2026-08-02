@@ -40,7 +40,8 @@
     pendingReasons: new Set(),
     selectionInspectionCount: 0,
     discardedSelectionCandidates: 0,
-    lastConfigurationLatencyMs: null
+    lastConfigurationLatencyMs: null,
+    analysisBase: null
   };
 
   let host, shadow;
@@ -200,6 +201,7 @@
 
   function probabilityDetails(metrics) {
     const p = probabilityBreakdown(metrics);
+    if (!p.sample) return '<div class="empty">Sem ocorrências históricas avaliáveis.</div>';
     return `<div class="probability-details">
       <div class="probability-details-head">
         <strong>Probabilidades históricas</strong>
@@ -413,6 +415,7 @@
         <div class="row"><span class="muted">Captura</span><b id="status">Inicializando</b></div>
         <div class="row"><span class="muted">Ativo</span><b id="symbol">—</b></div>
         <div class="row"><span class="muted">Velas salvas</span><b id="candles">0</b></div>
+        <div id="analysis-base" class="small">Identifique um ativo para analisar o histórico salvo.</div>
         <div><span id="mode-badge" class="mode-badge classic">Modo clássico</span></div>
 
         <div class="context-strip" id="context-strip"></div>
@@ -537,6 +540,22 @@
     const entryState = entryStateLabel(signal);
     const expired = isSignalExpired(signal);
 
+    if (!item.analysisAvailable) {
+      focus.innerHTML = `<div class="focus-card">
+        <div class="focus-title"><strong>${item.name}</strong></div>
+        <div class="decision insufficient">Amostra estrutural insuficiente</div>
+        <div class="entry-grid">
+          <div><span>Disponíveis</span><strong>${item.availableQuadrants}</strong></div>
+          <div><span>Necessários</span><strong>${item.minimumQuadrantsRequired}</strong></div>
+        </div>
+        <div class="note">${item.unavailableReason}</div>
+      </div>`;
+      shadow.getElementById('signals').classList.add('hidden-list');
+      focus.classList.add('active');
+      shadow.getElementById('back-list').style.display = 'block';
+      return;
+    }
+
     focus.innerHTML = `
       <div class="focus-card ${expired ? 'expired' : (rec?.recommendation === 'ENTER' ? 'recommended' : '')}">
         <div class="focus-title">
@@ -566,7 +585,7 @@
         </div>
 
         <div class="results">
-          <div><span>Taxa</span><strong>${Number(m.rate || 0).toFixed(1)}%</strong></div>
+          <div><span>Taxa</span><strong>${Number.isFinite(m.rate) ? `${m.rate.toFixed(1)}%` : 'Sem ocorrências'}</strong></div>
           <div><span>Amostra</span><strong>${m.sample || 0}</strong></div>
           <div><span>Win</span><strong>${m.direct || 0}</strong></div>
           <div><span>Win G1</span><strong>${m.g1 || 0}</strong></div>
@@ -604,6 +623,11 @@
 
     list.innerHTML = state.floating.length
       ? state.floating.map(item => {
+          if (!item.analysisAvailable) return `<div class="signal" data-strategy-id="${item.strategyId}">
+            <div class="signal-head"><strong>${item.shortName}</strong><b class="muted">Base insuficiente</b></div>
+            <div class="small">Amostra estrutural insuficiente</div>
+            <div class="metrics"><span>Disponíveis: ${item.availableQuadrants}</span><span>Necessários: ${item.minimumQuadrantsRequired}</span></div>
+          </div>`;
           const signal = item.liveSignal;
           const rec = effectiveRecommendation(item.recommendation, signal);
           const direction = signal?.direction;
@@ -621,7 +645,7 @@
                 : 'sem condição no quadrante atual'
             }</div>
             <div class="metrics">
-              <span>${Number(item.metrics.rate || 0).toFixed(1)}%</span>
+              <span>${Number.isFinite(item.metrics.rate) ? `${item.metrics.rate.toFixed(1)}%` : 'Sem ocorrências'}</span>
               <span>${item.metrics.sample || 0} ocorrências</span>
               <span>${item.metrics.losses || 0} loss</span>
             </div>
@@ -649,6 +673,7 @@
       selectedInstrumentKey: state.selectedInstrumentKey,
       recommendationMode: state.recommendationMode,
       contexts: state.contexts, floating: state.floating,
+      analysisBase: state.analysisBase,
       focusedStrategyId: state.focusedStrategyId
     });
     if (signature === state.lastRenderSignature) return;
@@ -660,6 +685,16 @@
       state.status === 'capturando' ? 'ok' : 'warn';
     shadow.getElementById('symbol').textContent = state.symbol || '—';
     shadow.getElementById('candles').textContent = state.candles;
+    const base = state.analysisBase;
+    shadow.getElementById('analysis-base').textContent = !base || base.status === 'waiting-identity'
+      ? 'Aguardando identificação do ativo.'
+      : base.status === 'waiting-history'
+        ? 'Nenhum quadrante completo disponível. Capturando histórico e velas em tempo real.'
+        : base.status === 'insufficient'
+          ? `Base estrutural insuficiente — ${base.available} quadrante(s) disponível(is); estratégias selecionadas exigem pelo menos ${base.minimumRequirement}.`
+          : base.status === 'partial'
+            ? `Análise parcial: ${base.used} de até ${base.limit} quadrantes. A carga depende do histórico fornecido pela IQ Option.`
+            : `Base configurada completa: ${base.used} quadrantes utilizados.`;
     const modeBadge = shadow.getElementById('mode-badge');
     modeBadge.className = `mode-badge ${state.recommendationMode}`;
     modeBadge.textContent = state.recommendationMode === 'analytical'
@@ -709,6 +744,16 @@
         state.contexts = response.analysis.contexts || null;
         state.marketQuality = response.analysis.marketQuality || null;
         state.recommendationMode = response.analysis.recommendationMode || 'classic';
+        state.analysisBase = {
+          limit: response.analysis.quadrantLimit,
+          available: response.analysis.completeQuadrantsAvailable,
+          used: response.analysis.quadrantsUsed,
+          missing: response.analysis.quadrantsMissing,
+          status: response.analysis.analysisStatus,
+          availableStrategies: response.analysis.availableStrategyCount,
+          unavailableStrategies: response.analysis.unavailableStrategyCount,
+          minimumRequirement: response.analysis.minimumAvailableRequirement
+        };
         state.floating = (response.analysis.floating || []).map(item => ({
           ...item,
           galeLevel: item.galeLevel ?? 0
@@ -723,6 +768,7 @@
           marketQuality: state.marketQuality,
           recommendationMode: state.recommendationMode,
           quadrantsUsed: response.analysis.quadrantsUsed,
+          analysisBase: state.analysisBase,
           configurationRevision
         });
         if (
@@ -787,16 +833,20 @@
       state.marketQuality = snapshot.marketQuality;
       state.recommendationMode = snapshot.recommendationMode;
       state.floating = snapshot.floating;
+      state.analysisBase = snapshot.analysisBase || null;
     } else {
       // Nunca mantém cards do instrumento anterior sob o novo cabeçalho.
       state.contexts = null;
       state.marketQuality = null;
       state.floating = [];
+      state.analysisBase = null;
       state.focusedStrategyId = null;
     }
-    await chrome.runtime.sendMessage({ type: 'SELECT_INSTRUMENT', instrument, reason });
-    render(); // Exibe somente cache do mesmo instrumento ou o estado vazio de sincronização.
-    refreshAnalysis('selection');
+    await IQLABMultiAsset.runConfirmedSelectionFlow({
+      notifySelection: () => chrome.runtime.sendMessage({ type: 'SELECT_INSTRUMENT', instrument, reason }),
+      renderSelection: render, // Nunca mostra o snapshot de outro instrumento.
+      refreshAnalysis
+    });
     return true;
   }
 
@@ -942,12 +992,18 @@
       timeframeSec: identity.timeframeSec
     };
 
-    const normalized = rawCandles.map(raw => ({ raw, context }));
+    // Uma resposta histórica sem identidade não chega ao normalizador nem ao banco.
+    const normalized = historical && !correlation
+      ? []
+      : rawCandles.map(raw => ({ raw, context }));
 
     if (normalized.length) {
       const response = await chrome.runtime.sendMessage({
         type: 'CANDLES',
-        candles: normalized
+        candles: normalized,
+        origin: context.origin,
+        requestId: correlation?.requestId ?? null,
+        socketId: correlation?.socketId ?? null
       });
       state.totalCaptured += response?.saved || 0;
       const expectedKey = IQLABMultiAsset.instrumentKey(identity.activeId, identity.timeframeSec || 60);
@@ -978,7 +1034,16 @@
       type: 'DIAGNOSTIC',
       entry: {
         kind: envelope.type,
-        eventName: envelope.detail?.name,
+        eventName: envelope.detail?.name ?? envelope.detail?.eventName,
+        // Campos de histórico permanecem estruturados em uma única linha por lote/evento.
+        requestId: envelope.detail?.requestId ?? correlation?.requestId ?? null,
+        socketId: envelope.detail?.socketId ?? correlation?.socketId ?? null,
+        candleCount: envelope.detail?.responseCandleCount ?? envelope.detail?.candleCount ?? rawCandles.length,
+        requestedCount: correlation?.requestedCount ?? envelope.detail?.correlation?.requestedCount,
+        historyReason: envelope.detail?.reason ?? null,
+        pendingRequestCount: envelope.detail?.pendingRequestCount,
+        pendingRequestsSummary: envelope.detail?.pendingRequestsSummary,
+        protocolFixture: envelope.type === 'PROTOCOL_FIXTURE' ? envelope.detail : undefined,
         selectedInstrumentKey: state.selectedInstrumentKey,
         selectedActiveId: state.activeId,
         receivingInstruments: [...state.instruments.values()].map(item => ({
@@ -1022,6 +1087,7 @@
     state.analysisVersion += 1;
     state.analysisDirty = true;
     state.pendingReasons.add('configuration');
+    syncProtocolDiagnosticsSetting();
     state.lastConfigurationLatencyMs = Math.max(0, Date.now() - Number(message.change.changedAt || Date.now()));
     render(); // Reflete imediatamente uma remoção otimista inequívoca.
     refreshAnalysis('configuration');
@@ -1051,6 +1117,14 @@
   }).catch(error => {
     chrome.runtime.sendMessage({ type: 'DIAGNOSTIC', entry: { kind: 'CONFIG_REVISION_ERROR', eventName: error.message } });
   });
+
+  async function syncProtocolDiagnosticsSetting() {
+    const stored = await chrome.storage.local.get('historyProtocolDiagnostics');
+    window.dispatchEvent(new CustomEvent('IQ_CANDLE_LAB_PROTOCOL_DIAGNOSTICS', {
+      detail: { enabled: stored.historyProtocolDiagnostics === true }
+    }));
+  }
+  syncProtocolDiagnosticsSetting();
 
   let selectionObservationTimer = null;
   function scheduleSelectionObservation() {

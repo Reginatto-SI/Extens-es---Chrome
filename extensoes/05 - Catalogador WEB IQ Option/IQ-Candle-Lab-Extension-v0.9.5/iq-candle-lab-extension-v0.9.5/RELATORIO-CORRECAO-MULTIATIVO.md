@@ -215,3 +215,67 @@ O observer global de atributos foi removido. Um observer temporário acompanha s
 ### Limitações
 
 A validação real de suspensão do service worker, latência entre processos e identificação do contêiner de abas depende do Chrome com a IQ Option aberta. O teste automatizado usa mocks fiéis às APIs chamadas, mas não substitui essa verificação manual.
+
+## Carga histórica e inicialização progressiva da análise
+
+### Diagnóstico e causa encontrada
+
+A auditoria estática percorreu `WebSocket.send(get-candles) → store por socket → message(candles) → IQ_CANDLE_LAB_BRIDGE → content → normalizeCandleDetailed → background → IndexedDB → buildQuadrants → analyze → painel/dashboard`. A causa relevante era dupla: o bridge consumia histórico exclusivamente por `request_id`, enquanto respostas sem esse campo ficavam sem correlação; ainda assim o content encaminhava o lote, e o normalizador aplicava os defaults perigosos `activeId = unknown` e timeframe M1. Além disso, não havia diagnóstico agregado dos motivos de rejeição. O limite já era aplicado por `slice(-quadrantLimit)` e não bloqueava explicitamente a análise, mas a interface não distinguia limite, disponibilidade e mínimo, tornando a ausência de base persistida indistinguível de uma espera por 500.
+
+O repositório não contém HAR, captura de Network, console de uma sessão real ou fixture bruta da IQ Option. Portanto não é possível afirmar quantas solicitações a plataforma faz, quantos candles fornece por lote, se uma solicitação produz múltiplas respostas, nem se a quantidade entregue alcança 2.500 M1 (500 quadrantes). Os campos comprovados pelos fixtures existentes são `name=get-candles`, `request_id`, `body.active_id`, `body.size` (período) e `body.count` (quantidade). O código permanece somente observador; não envia pedidos próprios.
+
+### Fluxo histórico corrigido
+
+O adaptador de comando examina apenas contêineres conhecidos (`value`, `msg`, `body`, `params`, `msg.body` e `msg.params`) e registra `requestId`, `activeId`, `timeframeSec`, `requestedCount`, `from`, `to`, `requestedAt` e `socketId`. Uma resposta com ID usa correspondência exata. Sem ID, ela usa a fila somente quando existe exatamente uma solicitação pendente naquela instância de WebSocket; duas ou mais entradas são ambíguas e o lote não recebe identidade. A entrada é consumida após a resposta. Como não há fixture demonstrando múltiplas respostas por pedido, reter uma correlação consumida seria uma associação não comprovada e não foi implementado.
+
+Um lote não correlacionado gera um único `HISTORY_UNCORRELATED` estruturado com ID (ou `null`), quantidade detectável, socket, instante e motivo. O content não o encaminha à persistência. Para lotes correlacionados, o background registra uma linha `HISTORY_BATCH` com recebidos, normalizados, descartados, persistidos e contadores por motivo (`missing-active-id`, `missing-timeframe`, `invalid-time`, `invalid-ohlc` e `uncorrelated-history`, quando aplicável). A chave do IndexedDB continua deduplicando `activeId + timeframeSec + from`; não há religação pelo ativo selecionado.
+
+### `closed`, timeframe e quadrantes
+
+Histórico não é marcado fechado apenas por sua origem. A vela é fechada quando o payload a marca explicitamente ou quando `to` já terminou antes do instante atual; assim o último período ainda em formação permanece aberto. O timeframe histórico vem da solicitação correlacionada. No adaptador comprovado, `size` é período e `count` é quantidade; `count` nunca chega ao normalizador como timeframe. Quando `from/to` comprovam uma duração conhecida, essa duração prevalece. Valores ausentes/desconhecidos são rejeitados, sem fallback histórico para 60.
+
+`buildQuadrants` mantém somente M1 fechados, normaliza segundos/milissegundos na entrada, ordena cronologicamente, deduplica cada posição pela atualização mais recente e exige os minutos consecutivos 00–04, 05–09 etc. O diagnóstico agora inclui M1 armazenados/fechados, primeiro/último timestamp, minutos únicos, duplicidades, lacunas, sequência máxima e quadrantes completos/parciais.
+
+### Limite, mínimo e inicialização progressiva
+
+`quadrantLimit` é exclusivamente o máximo recente. `completeQuadrantsAvailable` é a quantidade completa no banco e `quadrantsUsed = min(disponíveis, limite)`. `minimumQuadrantsRequired` é derivado das estratégias ativas: regras comuns precisam de um quadrante e `two_quadrants_majority` precisa de dois; quando há estratégias com mínimos diferentes, a análise progressiva fica disponível assim que ao menos uma delas pode trabalhar. Nenhuma exigência global de 500 foi criada e regras/Gale não mudaram.
+
+Ao confirmar a seleção, o content solicita imediatamente `FLOATING_ANALYSIS`. O background consulta todo o IndexedDB e filtra pela chave selecionada, de modo que uma sessão reaberta analisa dados existentes sem aguardar WebSocket. Lotes históricos correlacionados são persistidos em uma transação e provocam uma análise consolidada; a fila já existente coalesce eventos concorrentes. Seleção, configuração e realtime relevante continuam acionando atualização.
+
+Dashboard e painel exibem limite, completos disponíveis, usados, ausentes e um dos estados: sem quadrante/capturando, análise parcial ou base completa. Estatísticas continuam calculáveis com amostra reduzida; cada estratégia preserva seu próprio comportamento de amostra.
+
+### Paginação e limitações
+
+Não foi implementada paginação. Não há evidência de protocolo, máximo por chamada, cursor/paginação ou comportamento de múltiplos lotes que autorize a extensão a transmitir `get-candles`. Assim, **não é possível confirmar neste ambiente que a IQ Option fornece histórico suficiente sozinha**. A correção aproveita integralmente o que a página já solicitar e correlacionar. Se a observação manual demonstrar menos que o necessário, uma paginação controlada deverá ser uma etapa posterior, baseada em payload real e limites comprovados.
+
+### Testes automatizados adicionados
+
+`tests/history-progressive.test.js` cobre os 12 cenários solicitados: 2.500/500; 250/50; vazio e primeiro quadrante; lote de mil; ausência de correlação; ordem decrescente; fechamento histórico seguro; separação size/count e M1; refresh na seleção com banco existente; limite maior que 37; lacunas; e deduplicação histórico/realtime. Também testa o fallback de fila unívoco e sua recusa quando ambíguo.
+
+### Roteiro manual com evidência real
+
+1. Limpe apenas o diagnóstico (não o banco), recarregue a extensão e abra DevTools/Network da IQ Option.
+2. Registre, para cada `get-candles`, socket, contêiner, `request_id`, `active_id`, `size`, `count`, `from/to/end` e horário.
+3. Conte respostas `candles`, seus contêineres, IDs e número de itens; verifique múltiplas respostas para o mesmo pedido.
+4. Selecione um ativo com banco preexistente e confirme análise antes de qualquer novo candle.
+5. Compare `HISTORY_REQUEST`, `HISTORY_BATCH` e `HISTORY_UNCORRELATED`; um lote ambíguo não pode aumentar o banco.
+6. Confira no dashboard primeiro/último M1, fechados, lacunas, completos, limite, disponíveis, utilizados e ausentes.
+7. Com limite 500 e menos dados, confirme “Análise parcial”; com zero, confirme a explicação de captura.
+8. Reabra o Chrome/extension sem apagar IndexedDB e confirme análise imediata após a identificação do instrumento.
+9. Exporte os payloads anonimizados para fixtures antes de considerar paginação ou suporte a múltiplas respostas por solicitação.
+
+### Refinamento: disponibilidade estrutural, persistência e fixtures do protocolo
+
+A disponibilidade deixou de ser um mínimo global calculado por `Math.min`. `getStrategyMinimumQuadrants()` centraliza o requisito observado em `signalForStrategy`: `previous_majority`, `previous_minority`, posições Q1/Q5, alternância e padrões 4×1 usam um quadrante completo; `two_quadrants_majority` usa dois. Os aliases `position_repeat` e `position_inverse` também são reconhecidos sem alterar as regras existentes. Cada backtest informa seu requisito, disponibilidade, motivo de indisponibilidade, métricas, sinal e recomendação. Uma estratégia abaixo do mínimo recebe métricas explicitamente insuficientes (`rate: null`) e não executa backtest, sinal ou recomendação.
+
+O status global considera somente estratégias ativas e marcadas para o painel flutuante: `waiting-identity` sem identidade confirmada; `waiting-history` sem quadrante completo; `insufficient` quando nenhuma estratégia aplicável alcança o mínimo; `partial` quando ao menos uma pode executar abaixo do teto; e `complete` quando a quantidade usada alcança `quadrantLimit`. O painel e dashboard mostram requisito estrutural sem apresentar 0% como estatística, além de limite, disponíveis, usados, distância até o teto e contagens de estratégias disponíveis/indisponíveis.
+
+`putCandles()` não chama mais todo `put` de persistência nova. Uma leitura consolidada na mesma transação classifica `inserted`, `updated`, `unchanged` e `written`; timestamps de captura e origem não criam atualização falsa. Antes da transação, `prepareCandleBatch()` normaliza e deduplica o lote, informando `received`, `normalized`, `rejected`, `uniqueInBatch` e motivos agregados. Assim, “written” significa somente inserção ou alteração efetiva, nunca “novos candles”.
+
+O diagnóstico `HISTORY_UNCORRELATED` inclui `socketId`, `requestId`, evento, quantidade da resposta, total pendente e resumo limitado a ID/ativo/timeframe/count/from/to/idade. A associação ao ativo selecionado continua proibida. Cada socket mantém apenas seu próprio store, TTL e limite.
+
+O modo opcional **Diagnóstico do protocolo** fica desativado por padrão e limita a 100 fixtures por ciclo habilitado. Ele registra somente direção, evento, socket, IDs, contexto histórico, contagens, primeiro/último timestamp, horários e caminhos estruturais relevantes. Valores de payload, cookies, tokens, saldo e dados de conta nunca entram na fixture. O dashboard permite habilitar o modo e exportar JSON anonimizado com até 100 registros persistidos.
+
+Para exportar: abra **Diagnóstico**, habilite **Diagnóstico do protocolo**, provoque a carga normal de histórico navegando pelos ativos e clique em **Exportar fixtures**. Compare solicitações/respostas pelos IDs, contagens, timestamps e `structurePaths`. A evidência ainda necessária antes de paginação é: cursor real (`from`, `to` ou `end`), máximo por página, repetição de `request_id`, cardinalidade pedido/resposta e condição de parada. A extensão permanece observadora: usa todo histórico disponibilizado pela IQ Option, mas não promete preencher o teto nem transmite `get-candles` complementar.
+
+Os testes adicionais cobrem mínimos individuais, status insuficiente/parcial/completo, classificação de 100 inserções com duplicatas e registros existentes/alterados, inicialização funcional orientada à seleção com base persistida, lote único de mil, histórico ambíguo com duas pendências, fixture sem campos sensíveis e cards sem percentual/recomendação enganosa. A validação do volume e formato reais continua dependente de uma sessão manual na IQ Option.
