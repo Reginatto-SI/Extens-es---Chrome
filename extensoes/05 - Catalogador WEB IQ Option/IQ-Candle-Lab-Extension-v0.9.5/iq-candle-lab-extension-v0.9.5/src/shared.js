@@ -1,6 +1,6 @@
 const IQLAB = (() => {
   const DB_NAME = 'iq-candle-lab';
-  const DB_VERSION = 10;
+  const DB_VERSION = 11;
   const STORES = {
     candles: 'candles',
     diagnostics: 'diagnostics',
@@ -162,6 +162,14 @@ const IQLAB = (() => {
           store.createIndex('by_from', 'from');
           store.createIndex('by_symbol', 'symbol');
           store.createIndex('by_timeframe', 'timeframeSec');
+        }
+        const candleStore = request.transaction.objectStore(STORES.candles);
+        // A identidade persistida é activeId + timeframe + instante; símbolo é apenas metadado.
+        if (candleStore.indexNames.contains('by_symbol_timeframe_from')) {
+          candleStore.deleteIndex('by_symbol_timeframe_from');
+        }
+        if (!candleStore.indexNames.contains('by_active_timeframe_from')) {
+          candleStore.createIndex('by_active_timeframe_from', ['activeId', 'timeframeSec', 'from'], { unique: true });
         }
         if (!db.objectStoreNames.contains(STORES.diagnostics)) {
           const store = db.createObjectStore(STORES.diagnostics, { keyPath: 'id', autoIncrement: true });
@@ -1078,13 +1086,26 @@ const IQLAB = (() => {
   async function analyze(candles, strategiesInput, options = {}) {
     const strategies = strategiesInput || await getStrategies();
     const sorted = [...candles].sort((a,b) => Number(b.from)-Number(a.from));
-    const latest = sorted[0] || null;
-    const currentAssetId = latest ? assetKey(latest) : null;
-    const current = currentAssetId ? sorted.filter(c => assetKey(c) === currentAssetId) : [];
+    const requestedActiveId = options.activeId == null ? null : String(options.activeId);
+    const requestedTimeframe = Number(options.timeframeSec || 0);
+    const fallback = sorted[0] || null;
+    const currentAssetId = requestedActiveId || (fallback ? assetKey(fallback) : null);
+    const current = currentAssetId ? sorted.filter(c =>
+      assetKey(c) === currentAssetId &&
+      (!requestedTimeframe || Number(c.timeframeSec) === requestedTimeframe)
+    ) : [];
+    const latest = current[0] || null;
     const symbol = latest?.symbol;
 
-    const quadrants = buildQuadrants(current);
-    const completed = quadrants.filter(q => q.complete);
+    const allQuadrants = buildQuadrants(current);
+    const completedAll = allQuadrants.filter(q => q.complete);
+    const quadrantLimit = typeof IQLABMultiAsset === 'undefined'
+      ? Math.min(5000, Math.max(20, Number(options.quadrantLimit) || 500))
+      : IQLABMultiAsset.clampQuadrantLimit(options.quadrantLimit);
+    const completed = completedAll.slice(-quadrantLimit);
+    // Mantém o quadrante corrente para sinais ao vivo, limitando apenas a base completa do backtest.
+    const quadrants = [...completed, ...allQuadrants.filter(q => !q.complete).slice(-1)]
+      .sort((a,b) => a.start - b.start);
     const m5 = aggregateCandles(current, 300);
     const m15 = aggregateCandles(current, 900);
     const m30 = aggregateCandles(current, 1800);
@@ -1121,7 +1142,11 @@ const IQLAB = (() => {
       currentAssetId,
       symbol,
       total: candles.length,
+      instrumentTotal: current.length,
       quadrants,
+      completeQuadrantsAvailable: completedAll.length,
+      quadrantsUsed: completed.length,
+      quadrantLimit,
       latestQuadrant: completed.at(-1) || null,
       aggregated: {
         m5: m5.filter(c => c.complete),

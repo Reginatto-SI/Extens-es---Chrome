@@ -1,4 +1,43 @@
-importScripts('shared.js');
+importScripts('multi-asset.js', 'shared.js');
+
+const tabStates = new Map();
+const CONFIGURATION_REVISION_KEY = 'iqCandleLabConfigurationRevision';
+let revisionQueue = Promise.resolve();
+function getTabState(tabId) {
+  if (!tabStates.has(tabId)) tabStates.set(tabId, IQLABMultiAsset.createTabState(tabId));
+  return tabStates.get(tabId);
+}
+
+chrome.tabs?.onRemoved?.addListener(tabId => tabStates.delete(tabId));
+
+async function getConfigurationRevision() {
+  const stored = await chrome.storage.local.get(CONFIGURATION_REVISION_KEY);
+  return Number(stored?.[CONFIGURATION_REVISION_KEY] || 0);
+}
+
+async function publishConfigurationChange(input) {
+  // Serializa incrementos para manter a revisão monotônica mesmo com cliques rápidos.
+  revisionQueue = revisionQueue.catch(() => undefined).then(async () => {
+    const revision = await getConfigurationRevision() + 1;
+    const change = IQLABMultiAsset.normalizeConfigurationChange(input, revision);
+    if (!change) throw new Error('Alteração de configuração inválida');
+    await chrome.storage.local.set({ [CONFIGURATION_REVISION_KEY]: revision });
+    const tabs = await chrome.tabs.query({ url: ['https://iqoption.com/*', 'https://*.iqoption.com/*'] });
+    let notifiedTabs = 0;
+    const failures = [];
+    await Promise.all((tabs || []).map(async tab => {
+      try {
+        await chrome.tabs.sendMessage(tab.id, { type: 'CONFIGURATION_INVALIDATED', change });
+        notifiedTabs += 1;
+      } catch (error) {
+        // Uma aba fechada/content script ausente não invalida a publicação global.
+        failures.push({ tabId: tab.id, error: error.message });
+      }
+    }));
+    return { change, notifiedTabs, failures };
+  });
+  return revisionQueue;
+}
 
 chrome.runtime.onInstalled.addListener(async () => {
   chrome.storage.local.set({ installedAt: Date.now(), version: chrome.runtime.getManifest().version });
@@ -11,28 +50,64 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
       sendResponse({ ok: true }); return;
     }
+    if (message.type === 'GET_CONFIGURATION_REVISION') {
+      sendResponse({ ok: true, revision: await getConfigurationRevision() }); return;
+    }
+    if (message.type === 'CONFIGURATION_CHANGED') {
+      const result = await publishConfigurationChange(message.change);
+      sendResponse({ ok: true, ...result }); return;
+    }
+    const captureTabId = sender.tab?.id;
+    const requiresCaptureTab = ['CANDLES', 'SELECT_INSTRUMENT', 'DIAGNOSTIC',
+      'FLOATING_ANALYSIS', 'MULTI_ASSET_DIAGNOSTIC'].includes(message.type);
+    if (requiresCaptureTab && captureTabId == null) {
+      sendResponse({ ok: false, error: 'Mensagem dependente de captura sem sender.tab' }); return;
+    }
+    const tab = captureTabId == null ? null : getTabState(captureTabId);
     if (message.type === 'CANDLES') {
       const normalized = (message.candles || []).map(item => IQLAB.normalizeCandle(item.raw, item.context)).filter(Boolean);
-      const reliable = normalized.find(c => c.activeId != null && c.activeId !== 'unknown');
-      let relinked = 0;
-      if (reliable) {
-        const result = await IQLAB.relinkHistoricalCandles(reliable.activeId, reliable.symbol);
-        relinked = result.updated || 0;
-      }
       const saved = await IQLAB.putCandles(normalized);
-      sendResponse({ ok: true, saved, relinked }); return;
+      const touched = IQLABMultiAsset.recordCandles(tab, normalized);
+      sendResponse({ ok: true, saved, touched, state: IQLABMultiAsset.snapshot(tab) }); return;
+    }
+    if (message.type === 'SELECT_INSTRUMENT') {
+      const changed = IQLABMultiAsset.selectInstrument(tab, message.instrument, message.reason);
+      sendResponse({ ok: true, changed, state: IQLABMultiAsset.snapshot(tab) }); return;
     }
     if (message.type === 'DIAGNOSTIC') {
       await IQLAB.addDiagnostic({ ...message.entry, tabId: sender.tab?.id });
       sendResponse({ ok: true }); return;
     }
     if (message.type === 'SUMMARY' || message.type === 'FLOATING_ANALYSIS') {
-      const [candles, strategies, recommendationMode] = await Promise.all([
+      const selectedKey = message.instrumentKey || tab?.selectedInstrumentKey || null;
+      const token = tab ? IQLABMultiAsset.beginAnalysis(tab, selectedKey) : null;
+      const configurationRevision = await getConfigurationRevision();
+      if (message.type === 'FLOATING_ANALYSIS' &&
+        Number(message.configurationRevision) !== configurationRevision) {
+        sendResponse({ ok: false, stale: true, configurationRevision }); return;
+      }
+      const [candles, strategies, recommendationMode, quadrantLimit] = await Promise.all([
         IQLAB.getAllCandles(),
         IQLAB.getStrategies(),
-        IQLAB.getSetting('recommendationMode', 'classic')
+        IQLAB.getSetting('recommendationMode', 'classic'),
+        IQLAB.getSetting('quadrantLimit', IQLABMultiAsset.DEFAULT_QUADRANT_LIMIT)
       ]);
-      const analysis = await IQLAB.analyze(candles, strategies, { recommendationMode });
+      const [activeId, timeframeSec] = String(selectedKey || '').split(':');
+      const analysis = await IQLAB.analyze(candles, strategies, {
+        recommendationMode,
+        activeId: selectedKey ? activeId : null,
+        timeframeSec: selectedKey ? Number(timeframeSec) : null,
+        quadrantLimit: IQLABMultiAsset.clampQuadrantLimit(quadrantLimit)
+      });
+
+      if (message.type === 'FLOATING_ANALYSIS' &&
+        configurationRevision !== await getConfigurationRevision()) {
+        sendResponse({ ok: false, stale: true, configurationRevision: await getConfigurationRevision() }); return;
+      }
+
+      if (message.type === 'FLOATING_ANALYSIS' && !IQLABMultiAsset.mayApplyAnalysis(tab, token)) {
+        sendResponse({ ok: false, stale: true }); return;
+      }
 
       if (message.type === 'FLOATING_ANALYSIS') {
         const floating = analysis.backtests
@@ -54,6 +129,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             contexts: analysis.contexts,
             marketQuality: analysis.marketQuality,
             recommendationMode: analysis.recommendationMode,
+            instrumentKey: selectedKey,
+            quadrantsUsed: analysis.quadrantsUsed,
+            configurationRevision,
             floating
           }
         });
@@ -62,6 +140,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       sendResponse({ ok: true, analysis });
       return;
+    }
+    if (message.type === 'MULTI_ASSET_DIAGNOSTIC') {
+      sendResponse({ ok: true, state: IQLABMultiAsset.snapshot(tab) }); return;
     }
     sendResponse({ ok: false, error: 'Mensagem desconhecida' });
   })().catch(error => sendResponse({ ok: false, error: error.message }));

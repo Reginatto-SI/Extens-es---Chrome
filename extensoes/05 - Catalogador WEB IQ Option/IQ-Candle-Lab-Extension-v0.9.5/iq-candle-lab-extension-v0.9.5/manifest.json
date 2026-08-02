@@ -30,6 +30,7 @@
         "https://*.iqoption.com/*"
       ],
       "js": [
+        "src/multi-asset.js",
         "src/content.js"
       ],
       "run_at": "document_start"
