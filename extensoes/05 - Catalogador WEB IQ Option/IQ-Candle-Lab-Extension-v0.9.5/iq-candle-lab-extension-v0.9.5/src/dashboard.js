@@ -2,6 +2,15 @@ const fmt = ts => ts ? new Date(ts * 1000).toLocaleString('pt-BR') : '—';
 const fmtTime = ts => ts ? new Date(ts * 1000).toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '—';
 const labelColor = c => c === 'green' ? 'Verde' : c === 'red' ? 'Vermelho' : c === 'doji' ? 'Doji' : c === 'neutral' ? 'Neutro' : c;
 const badge = c => `<span class="badge ${c}">${labelColor(c)}</span>`;
+let dashboardInstrumentKey = null;
+let lastConfigurationPublication = null;
+
+async function publishConfigurationChange(change) {
+  const response = await chrome.runtime.sendMessage({ type: 'CONFIGURATION_CHANGED', change });
+  if (!response?.ok) throw new Error(response?.error || 'Falha ao publicar alteração de configuração');
+  lastConfigurationPublication = response;
+  return response;
+}
 function contextHtml(c){ return `<strong>${labelColor(c.state)}</strong><p>${c.strength}% de força · amostra ${c.sample}</p>`; }
 function rateClass(rate){ return rate >= 75 ? 'good' : rate >= 60 ? 'medium' : 'low'; }
 function certaintyBadge(signal){
@@ -245,6 +254,12 @@ function setupTabs() {
 
 async function toggleStrategy(id, field, value) {
   await IQLAB.updateStrategy(id, { [field]: value });
+  await publishConfigurationChange({
+    type: 'strategy', strategyId: id,
+    reason: `strategy-${field}-updated`,
+    optimisticRemove: (field === 'active' || field === 'floating') && value === false,
+    changedAt: Date.now()
+  });
   await render();
 }
 
@@ -293,6 +308,9 @@ function renderStrategies(backtests) {
 async function setRecommendationMode(mode) {
   currentRecommendationMode = mode;
   await IQLAB.setSetting('recommendationMode', mode);
+  await publishConfigurationChange({
+    type: 'recommendation-mode', reason: 'recommendation-mode-updated', changedAt: Date.now()
+  });
   await render();
 }
 
@@ -308,13 +326,30 @@ function renderRecommendationMode(mode) {
 }
 
 async function render() {
-  const [candles, diagnostics, strategies, recommendationMode] = await Promise.all([
+  const [candles, diagnostics, strategies, recommendationMode, storedQuadrantLimit, storedInstrumentKey] = await Promise.all([
     IQLAB.getAllCandles(),
     IQLAB.getDiagnostics(30),
     IQLAB.getStrategies(),
-    IQLAB.getSetting('recommendationMode', 'classic')
+    IQLAB.getSetting('recommendationMode', 'classic'),
+    IQLAB.getSetting('quadrantLimit', IQLABMultiAsset.DEFAULT_QUADRANT_LIMIT),
+    IQLAB.getSetting('dashboardInstrumentKey', null)
   ]);
-  const a = await IQLAB.analyze(candles, strategies, { recommendationMode });
+  const coverage = IQLAB.getAssetCoverage(candles);
+  const availableKeys = coverage.map(row => IQLABMultiAsset.instrumentKey(row.activeId, row.timeframeSec)).filter(Boolean);
+  if (!dashboardInstrumentKey) dashboardInstrumentKey = availableKeys.includes(storedInstrumentKey)
+    ? storedInstrumentKey : availableKeys[0] || null;
+  const selector = document.getElementById('dashboard-instrument');
+  selector.innerHTML = coverage.length ? coverage.map(row => {
+    const key = IQLABMultiAsset.instrumentKey(row.activeId, row.timeframeSec);
+    return `<option value="${key}" ${key === dashboardInstrumentKey ? 'selected' : ''}>${row.symbol} · ${row.timeframeSec}s</option>`;
+  }).join('') : '<option value="">Aguardando captura</option>';
+  const quadrantLimit = IQLABMultiAsset.clampQuadrantLimit(storedQuadrantLimit);
+  const [dashboardActiveId, dashboardTimeframe] = String(dashboardInstrumentKey || '').split(':');
+  const a = await IQLAB.analyze(candles, strategies, {
+    recommendationMode, quadrantLimit,
+    activeId: dashboardInstrumentKey ? dashboardActiveId : null,
+    timeframeSec: dashboardInstrumentKey ? Number(dashboardTimeframe) : null
+  });
   renderRecommendationMode(recommendationMode);
   currentAnalysis = a;
 
@@ -322,6 +357,9 @@ async function render() {
   document.getElementById('m-symbol').textContent = a.symbol || 'Aguardando captura';
   document.getElementById('m-last').textContent = a.latest ? fmt(a.latest.from) : '—';
   document.getElementById('m-quads').textContent = a.quadrants.filter(q => q.complete).length;
+  document.getElementById('quadrant-limit').value = quadrantLimit;
+  document.getElementById('quadrant-limit-status').textContent =
+    `${a.quadrantsUsed} de ${a.completeQuadrantsAvailable} quadrantes completos disponíveis foram utilizados (limite ${quadrantLimit}).`;
 
   const timeframeCounts = candles.reduce((acc, candle) => {
     const measured = Number(candle.to) - Number(candle.from);
@@ -369,7 +407,8 @@ async function render() {
       H1: a.aggregated.h1.length,
       D1: a.aggregated.d1.length
     },
-    contexts: a.contexts
+    contexts: a.contexts,
+    configurationPublication: lastConfigurationPublication
   }, null, 2);
 
   for (const [k,v] of Object.entries(a.contexts)) {
@@ -428,7 +467,7 @@ async function render() {
     : '<p class="empty">Abra a IQ Option e aguarde a captura das mensagens de velas.</p>';
 
   document.getElementById('diagnostics').innerHTML = diagnostics.length
-    ? `<table><thead><tr><th>Horário</th><th>Tipo</th><th>Evento</th></tr></thead><tbody>${diagnostics.map(d=>`<tr><td>${new Date(d.createdAt).toLocaleTimeString('pt-BR')}</td><td>${d.kind||'—'}</td><td>${d.eventName||'—'}</td></tr>`).join('')}</tbody></table>`
+    ? `<table><thead><tr><th>Horário</th><th>Tipo</th><th>Evento</th><th>Selecionado</th><th>Recebendo</th><th>Configuração</th><th>Análise/descartes</th><th>DOM</th><th>Renders</th></tr></thead><tbody>${diagnostics.map(d=>`<tr><td>${new Date(d.createdAt).toLocaleTimeString('pt-BR')}</td><td>${d.kind||'—'}</td><td>${d.eventName||'—'}</td><td>${d.selectedInstrumentKey||'—'}</td><td>${(d.receivingInstruments||[]).map(x=>`${x.symbol} (${x.activeId}:${x.timeframeSec}s, ${x.uniqueCandles||0} únicas / ${x.receivedEvents||0} eventos)`).join(', ')||'—'}</td><td>rev ${d.configurationRevision||0} · ${d.lastInvalidationReason||'—'} · ${d.configurationLatencyMs??'—'} ms</td><td>${d.analysisRequest||0} / ${d.discardedAnalyses||0}</td><td>${d.selectionInspectionCount||0} / ${d.discardedSelectionCandidates||0}</td><td>${d.renderCount||0}</td></tr>`).join('')}</tbody></table>`
     : '<p class="empty">Nenhum evento diagnosticado.</p>';
 }
 
@@ -467,4 +506,20 @@ document.querySelectorAll('input[name="recommendation-mode"]').forEach(input => 
   input.addEventListener('change', () => {
     if (input.checked) setRecommendationMode(input.value);
   });
+});
+
+document.getElementById('quadrant-limit').addEventListener('change', async event => {
+  const value = IQLABMultiAsset.clampQuadrantLimit(event.target.value);
+  event.target.value = value;
+  await IQLAB.setSetting('quadrantLimit', value);
+  await publishConfigurationChange({
+    type: 'quadrant-limit', reason: 'quadrant-limit-updated', changedAt: Date.now()
+  });
+  render();
+});
+
+document.getElementById('dashboard-instrument').addEventListener('change', async event => {
+  dashboardInstrumentKey = event.target.value || null;
+  await IQLAB.setSetting('dashboardInstrumentKey', dashboardInstrumentKey);
+  render();
 });

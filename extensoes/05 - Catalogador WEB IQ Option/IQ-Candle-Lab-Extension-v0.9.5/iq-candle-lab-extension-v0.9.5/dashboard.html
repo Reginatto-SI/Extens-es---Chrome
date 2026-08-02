@@ -32,6 +32,26 @@
       <article><span>Quadrantes completos</span><strong id="m-quads">0</strong></article>
     </section>
 
+    <section class="card compact-card">
+      <div class="section-head">
+        <div><h2>Instrumento analisado</h2><p class="muted">A seleção permanece estável enquanto novos ativos são catalogados.</p></div>
+        <select id="dashboard-instrument" aria-label="Instrumento analisado"></select>
+      </div>
+    </section>
+
+    <section class="card compact-card">
+      <div class="section-head">
+        <div>
+          <h2>Base da análise</h2>
+          <p class="muted">Somente os quadrantes completos mais recentes entram no backtest.</p>
+        </div>
+        <label>Quadrantes analisados
+          <input id="quadrant-limit" type="number" min="20" max="5000" step="1" value="500">
+        </label>
+      </div>
+      <div id="quadrant-limit-status" class="mode-description"></div>
+    </section>
+
     <section class="card mode-card">
       <div class="section-head">
         <div>
@@ -126,6 +146,7 @@
   </section>
 </main>
 
+<script src="src/multi-asset.js"></script>
 <script src="src/shared.js"></script>
 <script src="src/dashboard.js"></script>
 

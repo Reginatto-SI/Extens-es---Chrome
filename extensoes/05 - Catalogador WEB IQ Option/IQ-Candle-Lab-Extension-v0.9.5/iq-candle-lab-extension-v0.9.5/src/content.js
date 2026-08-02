@@ -8,6 +8,7 @@
     status: 'inicializando',
     events: 0,
     candles: 0,
+    totalCaptured: 0,
     lastEvent: null,
     symbol: null,
     activeId: null,
@@ -16,7 +17,30 @@
     marketQuality: null,
     recommendationMode: 'classic',
     focusedStrategyId: null,
-    collapsed: false
+    collapsed: false,
+    selectedInstrumentKey: null,
+    instruments: new Map(),
+    analysisVersion: 0,
+    discardedAnalyses: 0,
+    renderCount: 0,
+    lastRenderSignature: null,
+    analysisPending: false,
+    analysisDirty: false,
+    analysisSnapshots: new Map(),
+    activeIdToSymbol: new Map(),
+    symbolToActiveId: new Map(),
+    selectionResolver: IQLABMultiAsset.createSelectionResolver(),
+    lastAnalysisStartedAt: 0,
+    configurationRevision: 0,
+    lastConfigurationChange: null,
+    lastConfigurationChangedAt: null,
+    lastInvalidationReason: null,
+    invalidatedSnapshots: 0,
+    duplicateConfigurationMessages: 0,
+    pendingReasons: new Set(),
+    selectionInspectionCount: 0,
+    discardedSelectionCandidates: 0,
+    lastConfigurationLatencyMs: null
   };
 
   let host, shadow;
@@ -620,6 +644,17 @@
   function render() {
     if (!shadow) return;
 
+    const signature = JSON.stringify({
+      status: state.status, symbol: state.symbol, candles: state.candles,
+      selectedInstrumentKey: state.selectedInstrumentKey,
+      recommendationMode: state.recommendationMode,
+      contexts: state.contexts, floating: state.floating,
+      focusedStrategyId: state.focusedStrategyId
+    });
+    if (signature === state.lastRenderSignature) return;
+    state.lastRenderSignature = signature;
+    state.renderCount += 1;
+
     shadow.getElementById('status').textContent = state.status;
     shadow.getElementById('status').className =
       state.status === 'capturando' ? 'ok' : 'warn';
@@ -642,14 +677,35 @@
     else renderList();
   }
 
-  async function refreshAnalysis() {
+  async function refreshAnalysis(reason = 'polling') {
+    if (!state.selectedInstrumentKey) return;
+    state.pendingReasons.add(reason);
+    if (IQLABMultiAsset.analysisQueueAction(state.analysisPending) === 'mark-dirty') {
+      state.analysisDirty = true;
+      return;
+    }
+    const instrumentKey = state.selectedInstrumentKey;
+    const configurationRevision = state.configurationRevision;
+    const requestVersion = ++state.analysisVersion;
+    state.analysisPending = true;
+    state.analysisDirty = false;
+    const delay = Math.max(0, 250 - (Date.now() - state.lastAnalysisStartedAt));
+    if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+    state.lastAnalysisStartedAt = Date.now();
     try {
       const response = await chrome.runtime.sendMessage({
-        type: 'FLOATING_ANALYSIS'
+        type: 'FLOATING_ANALYSIS',
+        instrumentKey,
+        configurationRevision
       });
 
-      if (response?.ok) {
-        state.symbol = response.analysis.symbol;
+      if (response?.ok && requestVersion === state.analysisVersion &&
+        instrumentKey === state.selectedInstrumentKey &&
+        configurationRevision === state.configurationRevision &&
+        response.analysis.configurationRevision === configurationRevision &&
+        response.analysis.instrumentKey === instrumentKey) {
+        state.status = 'capturando';
+        state.symbol = response.analysis.symbol || state.symbol;
         state.contexts = response.analysis.contexts || null;
         state.marketQuality = response.analysis.marketQuality || null;
         state.recommendationMode = response.analysis.recommendationMode || 'classic';
@@ -657,6 +713,18 @@
           ...item,
           galeLevel: item.galeLevel ?? 0
         }));
+        state.analysisSnapshots.set(instrumentKey, {
+          instrumentKey,
+          symbol: response.analysis.symbol || state.symbol,
+          timeframeSec: Number(instrumentKey.split(':')[1]),
+          analyzedAt: Date.now(),
+          floating: state.floating,
+          contexts: state.contexts,
+          marketQuality: state.marketQuality,
+          recommendationMode: state.recommendationMode,
+          quadrantsUsed: response.analysis.quadrantsUsed,
+          configurationRevision
+        });
         if (
           state.focusedStrategyId &&
           !state.floating.some(item => item.strategyId === state.focusedStrategyId)
@@ -664,47 +732,160 @@
           state.focusedStrategyId = null;
         }
         render();
+      } else if (response?.stale || requestVersion !== state.analysisVersion || instrumentKey !== state.selectedInstrumentKey) {
+        state.discardedAnalyses += 1;
+        if (Number(response?.configurationRevision) > state.configurationRevision) {
+          IQLABMultiAsset.applyConfigurationInvalidation(state, {
+            type: 'all', revision: Number(response.configurationRevision),
+            reason: 'configuration-revision-recovered', changedAt: Date.now(), source: 'background'
+          });
+          state.analysisDirty = true;
+        }
       }
-    } catch (_) {}
+    } catch (error) {
+      state.status = 'erro';
+      chrome.runtime.sendMessage({ type: 'DIAGNOSTIC', entry: { kind: 'ANALYSIS_ERROR', eventName: error.message } });
+    } finally {
+      state.analysisPending = false;
+      const rerunReason = state.pendingReasons.has('configuration') ? 'configuration' : 'coalesced';
+      const shouldRerun = IQLABMultiAsset.shouldRerunAnalysis(
+        state.analysisDirty, state.selectedInstrumentKey
+      );
+      state.pendingReasons.clear();
+      if (shouldRerun) {
+        state.analysisDirty = false;
+        queueMicrotask(() => refreshAnalysis(rerunReason));
+      }
+    }
   }
 
-  function extractMarketContext(value, found = {}, depth = 0) {
-    if (depth > 7 || value == null) return found;
-    if (Array.isArray(value)) {
-      for (const item of value) extractMarketContext(item, found, depth + 1);
-      return found;
-    }
-    if (typeof value !== 'object') return found;
+  function rememberInstrument(input) {
+    const key = IQLABMultiAsset.instrumentKey(input.activeId, input.timeframeSec);
+    if (!key) return null;
+    const current = state.instruments.get(key) || { key, candleCount: 0 };
+    Object.assign(current, input);
+    state.instruments.set(key, current);
+    return current;
+  }
 
-    const activeCandidates = [
-      value.active_id, value.activeId, value.instrument_active_id,
-      value.instrumentActiveId, value.active
-    ];
-
-    if (found.activeId == null) {
-      const active = activeCandidates.find(v =>
-        typeof v === 'number' || (typeof v === 'string' && v.trim())
-      );
-      if (active != null && typeof active !== 'object') found.activeId = active;
-    }
-
-    if (!found.symbol) {
-      const symbol = value.symbol ?? value.instrument ?? value.asset_name ??
-        value.instrument_name ?? value.name;
-      if (typeof symbol === 'string' && symbol.length <= 40) found.symbol = symbol;
-    }
-
-    const tf = Number(
-      value.timeframe ?? value.period ?? value.interval ?? value.size
+  async function selectInstrument(input, reason) {
+    const instrument = rememberInstrument(input);
+    if (!instrument || instrument.key === state.selectedInstrumentKey) return false;
+    state.selectedInstrumentKey = instrument.key;
+    state.activeId = instrument.activeId;
+    state.symbol = instrument.symbol || `ACTIVE-${instrument.activeId}`;
+    state.candles = instrument.candleCount || 0;
+    state.status = 'sincronizando';
+    state.analysisVersion += 1;
+    state.analysisDirty = true;
+    const snapshot = IQLABMultiAsset.snapshotForSelection(
+      state.analysisSnapshots, instrument.key, state.configurationRevision
     );
-    if (!found.timeframeSec && [60,300,900,1800,3600,86400].includes(tf)) {
-      found.timeframeSec = tf;
+    if (snapshot) {
+      state.symbol = snapshot.symbol || state.symbol;
+      state.contexts = snapshot.contexts;
+      state.marketQuality = snapshot.marketQuality;
+      state.recommendationMode = snapshot.recommendationMode;
+      state.floating = snapshot.floating;
+    } else {
+      // Nunca mantém cards do instrumento anterior sob o novo cabeçalho.
+      state.contexts = null;
+      state.marketQuality = null;
+      state.floating = [];
+      state.focusedStrategyId = null;
     }
+    await chrome.runtime.sendMessage({ type: 'SELECT_INSTRUMENT', instrument, reason });
+    render(); // Exibe somente cache do mesmo instrumento ou o estado vazio de sincronização.
+    refreshAnalysis('selection');
+    return true;
+  }
 
-    for (const child of Object.values(value)) {
-      extractMarketContext(child, found, depth + 1);
+  function rememberAssetMapping(activeId, symbolValue) {
+    const symbol = IQLABMultiAsset.validSymbol(symbolValue);
+    if (activeId == null || !symbol) return;
+    state.activeIdToSymbol.set(String(activeId), symbol);
+    state.symbolToActiveId.set(symbol.replace(/[^A-Z0-9]/gi, '').toUpperCase(), activeId);
+  }
+
+  function collectAssetMappings(value, depth = 0) {
+    if (value == null || depth > 7) return;
+    if (Array.isArray(value)) return value.forEach(item => collectAssetMappings(item, depth + 1));
+    if (typeof value !== 'object') return;
+    const activeId = value.active_id ?? value.activeId ?? value.instrument_active_id;
+    const symbol = value.symbol ?? value.instrument ?? value.asset_name ?? value.instrument_name;
+    rememberAssetMapping(activeId, symbol);
+    Object.values(value).forEach(child => collectAssetMappings(child, depth + 1));
+  }
+
+  function activeDomEvidence() {
+    const element = document.querySelector(
+      '[role="tab"][aria-selected="true"], [role="tab"][data-active="true"], [role="tab"].active'
+    );
+    if (!element) return null;
+    const explicit = element.getAttribute('data-symbol') || element.getAttribute('data-asset') ||
+      element.getAttribute('aria-label') || element.textContent;
+    const symbol = IQLABMultiAsset.validSymbol(explicit);
+    if (!symbol) return null;
+    const normalized = symbol.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const activeId = element.getAttribute('data-active-id') || state.symbolToActiveId.get(normalized);
+    if (activeId == null) return null;
+    return {
+      source: 'active-dom-tab', activeId,
+      symbol: state.activeIdToSymbol.get(String(activeId)) || symbol,
+      timeframeSec: Number(element.getAttribute('data-timeframe')) || 60,
+      confidence: 0.95, observedAt: Date.now()
+    };
+  }
+
+  function resolveDomSelection() {
+    state.selectionInspectionCount += 1;
+    const evidence = activeDomEvidence();
+    if (!evidence) {
+      state.discardedSelectionCandidates += 1;
+      return;
     }
-    return found;
+    const first = state.selectionResolver.consider({
+      selectedInstrumentKey: state.selectedInstrumentKey,
+      instruments: state.instruments,
+      selectionVersion: 0,
+      lastSyncReason: null
+    }, evidence);
+    if (first.idempotent) return;
+    setTimeout(async () => {
+      const confirmed = activeDomEvidence();
+      if (!confirmed || String(confirmed.activeId) !== String(evidence.activeId)) return;
+      const tabProxy = {
+        selectedInstrumentKey: state.selectedInstrumentKey,
+        instruments: state.instruments,
+        selectionVersion: 0,
+        lastSyncReason: null
+      };
+      const result = state.selectionResolver.consider(tabProxy, confirmed);
+      if (result.applied) await selectInstrument(confirmed, 'aba DOM ativa confirmada');
+      else if (result.conflict) {
+        state.discardedSelectionCandidates += 1;
+        chrome.runtime.sendMessage({ type: 'DIAGNOSTIC', entry: { kind: 'SELECTION_CONFLICT', eventName: result.reason } });
+      }
+    }, 140);
+  }
+
+  function extractMarketContext(value) {
+    // Somente contêineres conhecidos do protocolo; não busca active_id em objetos irmãos.
+    const containers = [value, value?.msg, value?.body, value?.params,
+      value?.msg?.body, value?.msg?.params].filter(item => item && typeof item === 'object' && !Array.isArray(item));
+    for (const item of containers) {
+      const activeId = item.active_id ?? item.activeId ?? item.instrument_active_id ?? item.instrumentActiveId;
+      if (typeof activeId !== 'number' && typeof activeId !== 'string') continue;
+      const symbol = IQLABMultiAsset.validSymbol(item.symbol ?? item.instrument ??
+        item.asset_name ?? item.instrument_name);
+      const timeframe = Number(item.timeframe ?? item.period ?? item.interval ?? item.size);
+      return {
+        activeId,
+        symbol: symbol || state.activeIdToSymbol.get(String(activeId)),
+        timeframeSec: [60,300,900,1800,3600,86400].includes(timeframe) ? timeframe : undefined
+      };
+    }
+    return {};
   }
 
   function walk(value, out = [], depth = 0) {
@@ -741,19 +922,24 @@
     }
 
     const payload = envelope.detail?.payload;
+    const correlation = envelope.detail?.correlation || null;
+    const eventName = envelope.detail?.name || '';
     const rawCandles = payload ? walk(payload) : [];
     const inferred = payload ? extractMarketContext(payload) : {};
+    if (eventName === 'underlying-list-changed') {
+      collectAssetMappings(payload);
+      resolveDomSelection();
+    }
 
-    if (inferred.activeId != null) state.activeId = inferred.activeId;
-    if (inferred.symbol) state.symbol = inferred.symbol;
+    // Uma resposta histórica herda identidade somente da solicitação correlacionada.
+    const historical = eventName === 'candles';
+    const identity = historical ? (correlation || {}) : inferred;
 
     const context = {
-      origin: /candles/i.test(envelope.detail?.name || '')
-        ? 'history'
-        : 'realtime',
-      activeId: inferred.activeId ?? state.activeId,
-      symbol: inferred.symbol ?? state.symbol,
-      timeframeSec: inferred.timeframeSec
+      origin: historical ? 'history' : 'realtime',
+      activeId: identity.activeId,
+      symbol: identity.symbol,
+      timeframeSec: identity.timeframeSec
     };
 
     const normalized = rawCandles.map(raw => ({ raw, context }));
@@ -763,8 +949,29 @@
         type: 'CANDLES',
         candles: normalized
       });
-      state.candles += response?.saved || 0;
-      await refreshAnalysis();
+      state.totalCaptured += response?.saved || 0;
+      const expectedKey = IQLABMultiAsset.instrumentKey(identity.activeId, identity.timeframeSec || 60);
+      const backgroundInstrument = (response?.state?.instruments || []).find(item =>
+        response.touched?.includes(item.key) && (!expectedKey || item.key === expectedKey)
+      );
+      const instrument = rememberInstrument({
+        activeId: backgroundInstrument?.activeId ?? identity.activeId,
+        symbol: backgroundInstrument?.symbol ?? identity.symbol,
+        timeframeSec: backgroundInstrument?.timeframeSec ?? identity.timeframeSec ?? 60,
+        marketType: backgroundInstrument?.marketType ?? (/otc/i.test(identity.symbol || '') ? 'otc' : 'unknown'),
+        lastCandleAt: Date.now(),
+        candleCount: backgroundInstrument?.uniqueCandles || 0,
+        receivedEvents: backgroundInstrument?.receivedEvents || 0,
+        uniqueCandles: backgroundInstrument?.uniqueCandles || 0
+      });
+      // Captura todos; somente o instrumento selecionado pode acionar análise/UI.
+      if (instrument?.key === state.selectedInstrumentKey) {
+        state.activeId = instrument.activeId;
+        state.symbol = instrument.symbol || state.symbol;
+        state.candles = instrument.candleCount;
+        state.status = 'capturando';
+        await refreshAnalysis('candle');
+      }
     }
 
     chrome.runtime.sendMessage({
@@ -772,15 +979,115 @@
       entry: {
         kind: envelope.type,
         eventName: envelope.detail?.name,
-        url: location.href
+        selectedInstrumentKey: state.selectedInstrumentKey,
+        selectedActiveId: state.activeId,
+        receivingInstruments: [...state.instruments.values()].map(item => ({
+          key: item.key,
+          activeId: item.activeId,
+          symbol: item.symbol,
+          timeframeSec: item.timeframeSec,
+          lastCandleAt: item.lastCandleAt,
+          receivedEvents: item.receivedEvents || 0,
+          uniqueCandles: item.uniqueCandles ?? item.candleCount ?? 0
+        })),
+        analysisRequest: state.analysisVersion,
+        discardedAnalyses: state.discardedAnalyses,
+        renderCount: state.renderCount,
+        lastSyncReason: envelope.type === 'HISTORY_REQUEST' ? 'histórico correlacionado, sem seleção' : null,
+        configurationRevision: state.configurationRevision,
+        lastConfigurationChange: state.lastConfigurationChange,
+        lastConfigurationChangedAt: state.lastConfigurationChangedAt,
+        lastInvalidationReason: state.lastInvalidationReason,
+        invalidatedSnapshots: state.invalidatedSnapshots,
+        duplicateConfigurationMessages: state.duplicateConfigurationMessages,
+        configurationLatencyMs: state.lastConfigurationLatencyMs,
+        selectionInspectionCount: state.selectionInspectionCount,
+        discardedSelectionCandidates: state.discardedSelectionCandidates,
+        pendingReasons: [...state.pendingReasons]
       }
     });
 
     ensureOverlay();
-    render();
+    if (!rawCandles.length || IQLABMultiAsset.instrumentKey(identity.activeId, identity.timeframeSec || 60) === state.selectedInstrumentKey) render();
   });
 
   document.addEventListener('DOMContentLoaded', ensureOverlay);
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message.type !== 'CONFIGURATION_INVALIDATED') return false;
+    const result = IQLABMultiAsset.applyConfigurationInvalidation(state, message.change);
+    if (!result.applied) {
+      sendResponse({ ok: true, ignored: true, revision: state.configurationRevision });
+      return false;
+    }
+    state.analysisVersion += 1;
+    state.analysisDirty = true;
+    state.pendingReasons.add('configuration');
+    state.lastConfigurationLatencyMs = Math.max(0, Date.now() - Number(message.change.changedAt || Date.now()));
+    render(); // Reflete imediatamente uma remoção otimista inequívoca.
+    refreshAnalysis('configuration');
+    chrome.runtime.sendMessage({
+      type: 'DIAGNOSTIC',
+      entry: {
+        kind: 'CONFIGURATION_INVALIDATED',
+        eventName: message.change.reason,
+        selectedInstrumentKey: state.selectedInstrumentKey,
+        configurationRevision: state.configurationRevision,
+        lastConfigurationChange: state.lastConfigurationChange,
+        lastConfigurationChangedAt: state.lastConfigurationChangedAt,
+        lastInvalidationReason: state.lastInvalidationReason,
+        invalidatedSnapshots: result.invalidatedSnapshots,
+        duplicateConfigurationMessages: state.duplicateConfigurationMessages,
+        configurationLatencyMs: state.lastConfigurationLatencyMs,
+        analysisRequest: state.analysisVersion,
+        pendingReasons: [...state.pendingReasons]
+      }
+    });
+    sendResponse({ ok: true, revision: state.configurationRevision });
+    return false;
+  });
+
+  chrome.runtime.sendMessage({ type: 'GET_CONFIGURATION_REVISION' }).then(response => {
+    if (response?.ok) state.configurationRevision = Math.max(state.configurationRevision, Number(response.revision || 0));
+  }).catch(error => {
+    chrome.runtime.sendMessage({ type: 'DIAGNOSTIC', entry: { kind: 'CONFIG_REVISION_ERROR', eventName: error.message } });
+  });
+
+  let selectionObservationTimer = null;
+  function scheduleSelectionObservation() {
+    if (selectionObservationTimer) return;
+    selectionObservationTimer = setTimeout(() => {
+      selectionObservationTimer = null;
+      resolveDomSelection();
+    }, 100);
+  }
+  // O clique/mutação apenas pede inspeção; a seleção exige aba DOM ativa estável e mapeada.
+  document.addEventListener('click', event => {
+    if (event.isTrusted) scheduleSelectionObservation();
+  }, true);
+  let selectionObserver = null;
+  const discoveryObserver = new MutationObserver(() => attachSelectionObserver());
+  function findInstrumentTabsContainer() {
+    const activeTab = document.querySelector(
+      '[role="tab"][aria-selected="true"], [role="tab"][data-active="true"], [role="tab"].active'
+    );
+    return activeTab?.closest('[role="tablist"]') || activeTab?.parentElement || null;
+  }
+  function attachSelectionObserver() {
+    const container = findInstrumentTabsContainer();
+    if (!container || selectionObserver) return false;
+    discoveryObserver.disconnect();
+    selectionObserver = new MutationObserver(scheduleSelectionObservation);
+    selectionObserver.observe(container, {
+      subtree: true, attributes: true,
+      attributeFilter: ['aria-selected', 'data-active', 'class', 'data-symbol', 'data-active-id']
+    });
+    scheduleSelectionObservation();
+    return true;
+  }
+  // Fallback temporário observa apenas inserções até localizar a região das abas.
+  if (!attachSelectionObserver()) {
+    discoveryObserver.observe(document.documentElement, { subtree: true, childList: true });
+  }
   setTimeout(ensureOverlay, 1500);
-  setInterval(refreshAnalysis, 5000);
+  setInterval(() => refreshAnalysis('polling'), 5000);
 })();
