@@ -199,6 +199,13 @@ const IQLABMultiAsset = (() => {
     return Boolean(analysisDirty && selectedInstrumentKey);
   }
 
+  async function runConfirmedSelectionFlow(tasks) {
+    // Ordem explícita: confirma no background, renderiza o estado e analisa o banco existente.
+    await tasks.notifySelection();
+    tasks.renderSelection();
+    await tasks.refreshAnalysis('selection');
+  }
+
   function applyConfigurationInvalidation(state, change) {
     if (!change || !Number.isFinite(Number(change.revision)) ||
       Number(change.revision) <= Number(state.configurationRevision || 0)) {
@@ -223,7 +230,7 @@ const IQLABMultiAsset = (() => {
     normalizeTimeframe, instrumentKey, clampQuadrantLimit, validSymbol, createTabState,
     ensureInstrument, recordCandles, selectInstrument, beginAnalysis,
     mayApplyAnalysis, snapshot, createSelectionResolver, snapshotForSelection,
-    analysisQueueAction, shouldRerunAnalysis, normalizeConfigurationChange,
+    analysisQueueAction, shouldRerunAnalysis, runConfirmedSelectionFlow, normalizeConfigurationChange,
     applyConfigurationInvalidation
   };
 })();

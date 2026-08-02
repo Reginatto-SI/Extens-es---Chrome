@@ -181,7 +181,9 @@ function openStrategyModal(strategyId){
   const expired = isSignalExpired(liveSignal);
   document.getElementById('modal-category').textContent = strategy.category;
   document.getElementById('modal-title').textContent = strategy.name;
-  const nextEntry = liveSignal
+  const nextEntry = !item.analysisAvailable
+    ? `<div class="next-entry neutral"><span>Amostra estrutural insuficiente</span><strong>Disponíveis: ${item.availableQuadrants}</strong><small>Necessários: ${item.minimumQuadrantsRequired}</small></div>`
+    : liveSignal
     ? `<div class="next-entry ${expired ? 'expired' : liveSignal.direction}">
         <span>Próxima entrada identificada</span>
         <strong>${liveSignal.direction === 'green' ? 'CALL · Verde' : 'PUT · Vermelho'}</strong>
@@ -196,7 +198,7 @@ function openStrategyModal(strategyId){
   document.getElementById('modal-body').innerHTML = `
     <p class="modal-description">${strategy.description}</p>
     <div class="modal-summary">
-      <div><span>Taxa observada</span><strong class="${rateClass(metrics.rate)}">${metrics.rate.toFixed(1)}%</strong></div>
+      <div><span>Taxa observada</span><strong class="${Number.isFinite(metrics.rate) ? rateClass(metrics.rate) : 'muted'}">${!item.analysisAvailable ? 'Amostra insuficiente' : Number.isFinite(metrics.rate) ? `${metrics.rate.toFixed(1)}%` : 'Sem ocorrências'}</strong></div>
       <div><span>Amostra</span><strong>${metrics.sample}</strong></div>
       <div><span>Win direto</span><strong>${metrics.direct}</strong></div>
       <div><span>Win G1</span><strong>${metrics.g1}</strong></div>
@@ -213,7 +215,7 @@ function openStrategyModal(strategyId){
         ${recommendationHtml(recommendation)}
       </section>
     </div>
-    ${probabilityDetailsBlock(metrics)}
+    ${item.analysisAvailable && metrics.sample ? probabilityDetailsBlock(metrics) : ''}
     <section>
       <div class="section-head">
         <h3>Linha do tempo de resultados</h3>
@@ -265,7 +267,7 @@ async function toggleStrategy(id, field, value) {
 
 function renderStrategies(backtests) {
   const target = document.getElementById('strategy-list');
-  target.innerHTML = backtests.map(({strategy:s, metrics:m}) => `
+  target.innerHTML = backtests.map(item => { const s = item.strategy, m = item.metrics; return `
     <article class="strategy-card ${s.active ? '' : 'disabled'}" data-strategy-id="${s.id}">
       <div class="strategy-head">
         <div>
@@ -277,19 +279,20 @@ function renderStrategies(backtests) {
       <p>${s.description}</p>
       <div class="rule-box"><strong>Regra:</strong> ${s.rule}</div>
       <div class="strategy-metrics">
-        <div><span>Taxa observada</span><strong class="${rateClass(m.rate)}">${m.rate.toFixed(1)}%</strong></div>
+        <div><span>Taxa observada</span><strong class="${Number.isFinite(m.rate) ? rateClass(m.rate) : 'muted'}">${!item.analysisAvailable ? 'Insuficiente' : Number.isFinite(m.rate) ? `${m.rate.toFixed(1)}%` : 'Sem ocorrências'}</strong></div>
         <div><span>Amostra</span><strong>${m.sample}</strong></div>
         <div><span>Win direto</span><strong>${m.direct}</strong></div>
         <div><span>G1 / G2</span><strong>${m.g1} / ${m.g2}</strong></div>
         <div><span>Loss</span><strong>${m.losses}</strong></div>
       </div>
+      ${item.analysisAvailable ? '' : `<div class="rule-box"><strong>Amostra estrutural insuficiente.</strong> Disponíveis: ${item.availableQuadrants}; necessários: ${item.minimumQuadrantsRequired}.</div>`}
       ${resultVisualBlock(m.results, 14)}
       <div class="strategy-actions">
         <label class="switch-label"><input type="checkbox" data-action="floating" data-id="${s.id}" ${s.floating?'checked':''}><span>Mostrar flutuante</span></label>
         <span class="muted">Gale até G${s.galeLevel}</span>
       </div>
     </article>
-  `).join('');
+  `; }).join('');
 
   target.querySelectorAll('input[data-action]').forEach(input => {
     input.addEventListener('change', event => {
@@ -326,13 +329,14 @@ function renderRecommendationMode(mode) {
 }
 
 async function render() {
-  const [candles, diagnostics, strategies, recommendationMode, storedQuadrantLimit, storedInstrumentKey] = await Promise.all([
+  const [candles, diagnostics, strategies, recommendationMode, storedQuadrantLimit, storedInstrumentKey, protocolDiagnostics] = await Promise.all([
     IQLAB.getAllCandles(),
     IQLAB.getDiagnostics(30),
     IQLAB.getStrategies(),
     IQLAB.getSetting('recommendationMode', 'classic'),
     IQLAB.getSetting('quadrantLimit', IQLABMultiAsset.DEFAULT_QUADRANT_LIMIT),
-    IQLAB.getSetting('dashboardInstrumentKey', null)
+    IQLAB.getSetting('dashboardInstrumentKey', null),
+    chrome.storage.local.get('historyProtocolDiagnostics')
   ]);
   const coverage = IQLAB.getAssetCoverage(candles);
   const availableKeys = coverage.map(row => IQLABMultiAsset.instrumentKey(row.activeId, row.timeframeSec)).filter(Boolean);
@@ -358,8 +362,22 @@ async function render() {
   document.getElementById('m-last').textContent = a.latest ? fmt(a.latest.from) : '—';
   document.getElementById('m-quads').textContent = a.quadrants.filter(q => q.complete).length;
   document.getElementById('quadrant-limit').value = quadrantLimit;
-  document.getElementById('quadrant-limit-status').textContent =
-    `${a.quadrantsUsed} de ${a.completeQuadrantsAvailable} quadrantes completos disponíveis foram utilizados (limite ${quadrantLimit}).`;
+  document.getElementById('protocol-diagnostics').checked = protocolDiagnostics.historyProtocolDiagnostics === true;
+  const statusText = a.analysisStatus === 'waiting-identity' ? 'Aguardando identificação do ativo.'
+    : a.analysisStatus === 'waiting-history' ? 'Nenhum quadrante completo disponível. Capturando histórico e velas em tempo real.'
+    : a.analysisStatus === 'insufficient' ? `Base estrutural insuficiente: as estratégias selecionadas exigem pelo menos ${a.minimumAvailableRequirement}.`
+    : a.analysisStatus === 'partial' ? `Análise parcial: ${a.quadrantsUsed} de até ${quadrantLimit} quadrantes.`
+    : `Base configurada completa: ${a.quadrantsUsed} quadrantes utilizados.`;
+  document.getElementById('quadrant-limit-status').innerHTML = `
+    <div class="diagnostic-grid">
+      <div><span>Limite configurado</span><strong>${quadrantLimit}</strong></div>
+      <div><span>Completos disponíveis</span><strong>${a.completeQuadrantsAvailable}</strong></div>
+      <div><span>Utilizados</span><strong>${a.quadrantsUsed}</strong></div>
+      <div><span>Para atingir o limite</span><strong>${a.quadrantsMissing}</strong></div>
+      <div><span>Estratégias analisáveis</span><strong>${a.availableStrategyCount}</strong></div>
+      <div><span>Base insuficiente</span><strong>${a.unavailableStrategyCount}</strong></div>
+    </div>
+    <p>${statusText}</p><p>Faltam ${a.quadrantsMissing} quadrantes para atingir o limite configurado. A carga automática depende do histórico fornecido pela IQ Option.</p>`;
 
   const timeframeCounts = candles.reduce((acc, candle) => {
     const measured = Number(candle.to) - Number(candle.from);
@@ -445,7 +463,7 @@ async function render() {
         </button>`).join('')}</div>`
     : '<p class="empty">Nenhuma estratégia ativa encontrou condição no último quadrante completo.</p>';
 
-  const ranked = a.backtests.filter(x => x.strategy.active).slice(0,6);
+  const ranked = a.backtests.filter(x => x.strategy.active && x.analysisAvailable && Number.isFinite(x.metrics.rate)).slice(0,6);
   document.getElementById('ranking').innerHTML = ranked.length
     ? ranked.map((x,i) => `<button class="rank-row rank-button" data-strategy-id="${x.strategy.id}"><span class="rank-number">${i+1}</span><div><strong>${x.strategy.shortName}</strong><small>${x.metrics.sample} ocorrências</small></div><b class="${rateClass(x.metrics.rate)}">${x.metrics.rate.toFixed(1)}%</b></button>`).join('')
     : '<p class="empty">Nenhuma estratégia ativa.</p>';
@@ -493,6 +511,26 @@ document.getElementById('copy-diagnostic').onclick = async () => {
     document.getElementById('copy-diagnostic').textContent = 'Copiado';
     setTimeout(() => document.getElementById('copy-diagnostic').textContent = 'Copiar diagnóstico', 1500);
   } catch (_) {}
+};
+
+document.getElementById('protocol-diagnostics').onchange = async event => {
+  await chrome.storage.local.set({ historyProtocolDiagnostics: event.target.checked });
+  // Reutiliza a publicação orientada a eventos para atualizar todas as abas abertas.
+  await publishConfigurationChange({
+    type: 'all', reason: 'history-protocol-diagnostics-updated', changedAt: Date.now()
+  });
+};
+
+document.getElementById('export-protocol').onclick = async () => {
+  const diagnostics = await IQLAB.getDiagnostics(500);
+  const fixtures = diagnostics.map(row => row.protocolFixture).filter(Boolean).slice(0, 100);
+  const blob = new Blob([JSON.stringify({
+    schema: 'iq-candle-lab-history-protocol-v1', exportedAt: new Date().toISOString(), fixtures
+  }, null, 2)], { type:'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url; anchor.download = `iq-history-protocol-${Date.now()}.json`; anchor.click();
+  URL.revokeObjectURL(url);
 };
 
 document.querySelectorAll('[data-close-modal]').forEach(element => {

@@ -65,10 +65,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     const tab = captureTabId == null ? null : getTabState(captureTabId);
     if (message.type === 'CANDLES') {
-      const normalized = (message.candles || []).map(item => IQLAB.normalizeCandle(item.raw, item.context)).filter(Boolean);
-      const saved = await IQLAB.putCandles(normalized);
+      // Um diagnóstico agregado por lote evita descarte silencioso e logs por candle.
+      const prepared = IQLAB.prepareCandleBatch(message.candles || []);
+      const normalized = prepared.candles;
+      const rejectedByReason = prepared.rejectedByReason;
+      const persistence = await IQLAB.putCandles(normalized);
       const touched = IQLABMultiAsset.recordCandles(tab, normalized);
-      sendResponse({ ok: true, saved, touched, state: IQLABMultiAsset.snapshot(tab) }); return;
+      if (message.origin === 'history') {
+        await IQLAB.addDiagnostic({
+          kind: 'HISTORY_BATCH', tabId: sender.tab?.id,
+          requestId: message.requestId ?? null, socketId: message.socketId ?? null,
+          received: (message.candles || []).length, normalized: normalized.length,
+          discarded: (message.candles || []).length - normalized.length,
+          discardedByReason: rejectedByReason,
+          uniqueInBatch: normalized.length,
+          inserted: persistence.inserted,
+          updated: persistence.updated,
+          unchanged: persistence.unchanged,
+          written: persistence.written
+        });
+      }
+      sendResponse({ ok: true, saved: persistence.written, persistence, normalized: normalized.length,
+        discarded: (message.candles || []).length - normalized.length,
+        discardedByReason: rejectedByReason, touched, state: IQLABMultiAsset.snapshot(tab) }); return;
     }
     if (message.type === 'SELECT_INSTRUMENT') {
       const changed = IQLABMultiAsset.selectInstrument(tab, message.instrument, message.reason);
@@ -117,6 +136,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             name: item.strategy.name,
             shortName: item.strategy.shortName || item.strategy.name,
             galeLevel: item.strategy.galeLevel || 0,
+            minimumQuadrantsRequired: item.minimumQuadrantsRequired,
+            availableQuadrants: item.availableQuadrants,
+            analysisAvailable: item.analysisAvailable,
+            unavailableReason: item.unavailableReason,
             metrics: item.metrics,
             liveSignal: item.liveSignal,
             recommendation: item.recommendation
@@ -131,6 +154,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             recommendationMode: analysis.recommendationMode,
             instrumentKey: selectedKey,
             quadrantsUsed: analysis.quadrantsUsed,
+            completeQuadrantsAvailable: analysis.completeQuadrantsAvailable,
+            quadrantLimit: analysis.quadrantLimit,
+            quadrantsMissing: analysis.quadrantsMissing,
+            minimumQuadrantsRequired: analysis.minimumQuadrantsRequired,
+            analysisStatus: analysis.analysisStatus,
+            analysisAvailable: analysis.analysisAvailable,
+            availableStrategyCount: analysis.availableStrategyCount,
+            unavailableStrategyCount: analysis.unavailableStrategyCount,
+            minimumAvailableRequirement: analysis.minimumAvailableRequirement,
             configurationRevision,
             floating
           }
