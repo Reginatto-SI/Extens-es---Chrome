@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>IQ Candle Lab — Análise</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>IQ Candle Lab</h1>
+    <p>Análise local de velas e estratégias</p>
+  </div>
+  <button id="refresh" class="secondary">Atualizar</button>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="overview">Visão geral</button>
+  <button class="tab" data-tab="strategies">Estratégias</button>
+  <button class="tab" data-tab="quadrants">Quadrantes</button>
+  <button class="tab" data-tab="candles">Velas</button>
+  <button class="tab" data-tab="diagnostics">Diagnóstico</button>
+</nav>
+
+<main class="container">
+  <section id="tab-overview" class="tab-panel active">
+    <section class="grid metrics">
+      <article><span>Velas armazenadas</span><strong id="m-total">0</strong></article>
+      <article><span>Ativo atual</span><strong id="m-symbol">—</strong></article>
+      <article><span>Último candle</span><strong id="m-last">—</strong></article>
+      <article><span>Quadrantes completos</span><strong id="m-quads">0</strong></article>
+    </section>
+
+    <section class="card mode-card">
+      <div class="section-head">
+        <div>
+          <h2>Modo de recomendação</h2>
+          <p class="muted">O modo clássico mantém a lógica original. O modo analítico aplica intensidade e regime como filtros adicionais.</p>
+        </div>
+        <div class="mode-options">
+          <label class="mode-option">
+            <input type="radio" name="recommendation-mode" value="classic">
+            <span><strong>Clássico</strong><small>Mais permissivo</small></span>
+          </label>
+          <label class="mode-option">
+            <input type="radio" name="recommendation-mode" value="analytical">
+            <span><strong>Analítico</strong><small>Mais rigoroso</small></span>
+          </label>
+        </div>
+      </div>
+      <div id="mode-description" class="mode-description"></div>
+    </section>
+
+    <section class="card compact-card">
+      <div class="section-head">
+        <h2>Diagnóstico dos períodos capturados</h2>
+        <span class="muted">As estratégias exigem candles M1 de 60 segundos.</span>
+      </div>
+      <div id="timeframe-summary" class="tf-summary"></div>
+      <div id="formation-diagnostic" class="formation-diagnostic"></div>
+    </section>
+
+    <section class="grid contexts">
+      <article><h3>Mar <small id="ctx-label-mar"></small></h3><div id="ctx-mar"></div></article>
+      <article><h3>Maré <small id="ctx-label-mare"></small></h3><div id="ctx-mare"></div></article>
+      <article><h3>Onda <small id="ctx-label-onda"></small></h3><div id="ctx-onda"></div></article>
+      <article><h3>Marola <small id="ctx-label-marola"></small></h3><div id="ctx-marola"></div></article>
+    </section>
+
+    <section class="layout">
+      <article class="card">
+        <div class="section-head"><h2>Estratégias em observação</h2><span class="muted">Sinais do quadrante mais recente</span></div>
+        <div id="live-signals"></div>
+      </article>
+      <article class="card">
+        <h2>Ranking histórico local</h2>
+        <div id="ranking"></div>
+      </article>
+    </section>
+  </section>
+
+  <section id="tab-strategies" class="tab-panel">
+    <article class="card">
+      <div class="section-head">
+        <div>
+          <h2>Estratégias nativas</h2>
+          <p class="muted">Já configuradas. Ative, desative e escolha quais aparecem flutuando na IQ Option.</p>
+        </div>
+      </div>
+      <div id="strategy-list" class="strategy-grid"></div>
+    </article>
+  </section>
+
+  <section id="tab-quadrants" class="tab-panel">
+    <article class="card">
+      <h2>Quadrantes M1 recentes</h2>
+      <div id="quadrants" class="table-wrap"></div>
+    </article>
+  </section>
+
+  <section id="tab-candles" class="tab-panel">
+    <article class="card">
+      <div class="section-head"><h2>Últimas velas</h2><button id="export" class="secondary">Exportar JSON</button></div>
+      <div id="candles" class="table-wrap"></div>
+    </article>
+  </section>
+
+  <section id="tab-diagnostics" class="tab-panel">
+    <article class="card">
+      <h2>Diagnóstico recente</h2>
+      <div id="diagnostics" class="table-wrap"></div>
+    </article>
+    <article class="card">
+      <h2>Cobertura histórica por ativo</h2>
+      <p class="muted">O backtest usa somente velas do mesmo ativo, mercado e timeframe.</p>
+      <div id="asset-coverage" class="table-wrap"></div>
+    </article>
+    <article class="card">
+      <div class="section-head">
+        <h2>Diagnóstico de formação dos quadrantes</h2>
+        <button id="copy-diagnostic" class="secondary">Copiar diagnóstico</button>
+      </div>
+      <pre id="diagnostic-json" class="diagnostic-json"></pre>
+    </article>
+  </section>
+</main>
+
+<script src="src/shared.js"></script>
+<script src="src/dashboard.js"></script>
+
+<div id="strategy-modal" class="modal" aria-hidden="true">
+  <div class="modal-backdrop" data-close-modal></div>
+  <article class="modal-dialog">
+    <div class="modal-head">
+      <div>
+        <span id="modal-category" class="category"></span>
+        <h2 id="modal-title">Estratégia</h2>
+      </div>
+      <button class="modal-close" data-close-modal>×</button>
+    </div>
+    <div id="modal-body"></div>
+  </article>
+</div>
+
+</body>
+</html>

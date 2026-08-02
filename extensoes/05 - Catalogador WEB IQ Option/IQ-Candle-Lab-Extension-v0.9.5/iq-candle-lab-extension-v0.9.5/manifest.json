@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "IQ Candle Lab",
+  "version": "0.9.5",
+  "description": "Remove tooltips flutuantes de probabilidades e mantém os dados em blocos fixos no detalhamento.",
+  "permissions": [
+    "storage",
+    "unlimitedStorage"
+  ],
+  "host_permissions": [
+    "https://iqoption.com/*",
+    "https://*.iqoption.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "action": {
+    "default_title": "IQ Candle Lab",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "assets/icon-16.png",
+      "32": "assets/icon-32.png"
+    }
+  },
+  "options_page": "dashboard.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://iqoption.com/*",
+        "https://*.iqoption.com/*"
+      ],
+      "js": [
+        "src/content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/page-bridge.js"
+      ],
+      "matches": [
+        "https://iqoption.com/*",
+        "https://*.iqoption.com/*"
+      ]
+    }
+  ],
+  "icons": {
+    "16": "assets/icon-16.png",
+    "32": "assets/icon-32.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
+  }
+}
